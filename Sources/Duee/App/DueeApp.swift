@@ -10,7 +10,7 @@ struct DueeApp: App {
     var body: some Scene {
         Window("duee", id: "main") {
             DueeRootView()
-                .frame(minWidth: 360, minHeight: 62)
+                .frame(minWidth: 360, minHeight: 48)
                 .preferredColorScheme(appearanceMode.colorScheme)
         }
         .defaultSize(width: 390, height: 470)

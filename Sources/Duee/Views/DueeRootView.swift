@@ -16,6 +16,7 @@ struct DueeRootView: View {
     @State private var isShowingSettings = false
     @State private var isCollapsed = false
     @State private var expandedWindowHeight: CGFloat = 470
+    @State private var collapseAnchorBottomY: CGFloat?
     @Namespace private var rowAnimation
 
     init() {
@@ -56,16 +57,17 @@ struct DueeRootView: View {
             maxHeight: .infinity,
             alignment: isCollapsed ? .leading : .topLeading
         )
-        .padding(.top, isCollapsed ? 8 : 11)
+        .padding(.top, isCollapsed ? 4 : 11)
         .padding(.leading, 18)
         .padding(.trailing, 18)
-        .padding(.bottom, isCollapsed ? 8 : 18)
+        .padding(.bottom, isCollapsed ? 4 : 18)
         .background(.clear)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(rootStrokeColor, lineWidth: 0.5)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .ignoresSafeArea(.container, edges: .top)
         .onTapGesture {
             if isCollapsed {
@@ -159,32 +161,34 @@ struct DueeRootView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 8) {
             if isCollapsed {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text("duee")
-                        .font(.system(size: 24, weight: .semibold))
+                        .font(.system(size: 20, weight: .semibold))
                         .tracking(0.1)
 
                     Text(collapsedSummaryText)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-            } else {
-                Text("duee")
-                    .font(.system(size: 24, weight: .semibold))
-                    .tracking(0.1)
-            }
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 6)
 
-            if isCollapsed {
                 headerCircleButton(
                     systemImage: "xmark",
                     accessibilityText: "Hide window from screen",
                     action: hideWindowFromScreen
                 )
             } else {
+                Text("duee")
+                    .font(.system(size: 24, weight: .semibold))
+                    .tracking(0.1)
+
+                Spacer(minLength: 8)
+
                 headerCircleButton(
                     systemImage: "minus",
                     accessibilityText: "Minimize to title only",
@@ -310,22 +314,29 @@ struct DueeRootView: View {
             return
         }
 
-        let collapsedHeight: CGFloat = 70
+        let collapsedHeight: CGFloat = 48
         let expandedMinHeight: CGFloat = 420
 
         if isCollapsed {
             isCollapsed = false
             let targetHeight = max(expandedWindowHeight, expandedMinHeight)
+            let anchoredBottomY = collapseAnchorBottomY ?? window.frame.minY
+            collapseAnchorBottomY = nil
             DispatchQueue.main.async {
                 window.minSize = NSSize(width: 360, height: expandedMinHeight)
-                resize(window: window, toHeight: targetHeight)
+                resize(window: window, toHeight: targetHeight, anchoredToBottom: anchoredBottomY, animate: false)
             }
         } else {
             expandedWindowHeight = max(window.frame.height, expandedMinHeight)
+            let anchoredBottomY = window.frame.minY
+            collapseAnchorBottomY = anchoredBottomY
             isCollapsed = true
             DispatchQueue.main.async {
                 window.minSize = NSSize(width: 360, height: collapsedHeight)
-                resize(window: window, toHeight: collapsedHeight)
+                resize(window: window, toHeight: collapsedHeight, anchoredToBottom: anchoredBottomY, animate: false)
+                DispatchQueue.main.async {
+                    resize(window: window, toHeight: collapsedHeight, anchoredToBottom: anchoredBottomY, animate: false)
+                }
             }
         }
     }
@@ -371,10 +382,18 @@ struct DueeRootView: View {
         .accessibilityLabel(accessibilityText)
     }
 
-    private func resize(window: NSWindow, toHeight newHeight: CGFloat) {
+    private func resize(
+        window: NSWindow,
+        toHeight newHeight: CGFloat,
+        anchoredToBottom bottomY: CGFloat? = nil,
+        animate: Bool = true
+    ) {
         var frame = window.frame
-        frame.size.height = newHeight
-        window.setFrame(frame, display: true, animate: true)
+        frame.size.height = round(newHeight)
+        if let bottomY {
+            frame.origin.y = round(bottomY)
+        }
+        window.setFrame(frame, display: true, animate: animate)
     }
 }
 

@@ -54,7 +54,7 @@ struct DueeSettingsView: View {
                 Slider(value: $unfocusedBackgroundAlpha, in: 0.35 ... 0.95, step: 0.01)
                     .accessibilityLabel("Unfocused transparency")
 
-                Text("Lower values make the window more transparent when unfocused.")
+                Text("Lower = more transparent when unfocused.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -81,9 +81,6 @@ struct DueeSettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
 
-                Text("Default is System.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
