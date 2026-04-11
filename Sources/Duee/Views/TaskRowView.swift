@@ -2,10 +2,12 @@ import SwiftUI
 
 struct TaskRowView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dueeColorTheme) private var colorTheme
 
     let task: DueeTask
     let namespace: Namespace.ID
     let onToggle: () -> Void
+    let onEdit: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovered = false
@@ -55,6 +57,10 @@ struct TaskRowView: View {
             isHovered = hovering
         }
         .contextMenu {
+            Button(action: onEdit) {
+                Label("Edit", systemImage: "pencil")
+            }
+
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
@@ -64,35 +70,52 @@ struct TaskRowView: View {
     }
 
     private var rowBackground: some ShapeStyle {
-        if colorScheme == .dark {
-            return Color.white.opacity(task.isCompleted ? (isHovered ? 0.16 : 0.12) : (isHovered ? 0.24 : 0.2))
+        if colorTheme.isCurrent {
+            if colorScheme == .dark {
+                return Color.white.opacity(task.isCompleted ? (isHovered ? 0.16 : 0.12) : (isHovered ? 0.24 : 0.2))
+            }
+            return Color.black.opacity(task.isCompleted ? (isHovered ? 0.08 : 0.06) : (isHovered ? 0.12 : 0.09))
         }
-        return Color.black.opacity(task.isCompleted ? (isHovered ? 0.08 : 0.06) : (isHovered ? 0.12 : 0.09))
+        let base = colorTheme.surfaceTone(for: colorScheme)
+        let completedOpacity = colorScheme == .dark ? (isHovered ? 0.25 : 0.2) : (isHovered ? 0.18 : 0.14)
+        let activeOpacity = colorScheme == .dark ? (isHovered ? 0.34 : 0.28) : (isHovered ? 0.25 : 0.2)
+        return base.opacity(task.isCompleted ? completedOpacity : activeOpacity)
     }
 
     private var rowStrokeColor: Color {
-        if colorScheme == .dark {
-            return .white.opacity(task.isCompleted ? 0.14 : 0.2)
+        if colorTheme.isCurrent {
+            if colorScheme == .dark {
+                return .white.opacity(task.isCompleted ? 0.14 : 0.2)
+            }
+            return .black.opacity(task.isCompleted ? 0.1 : 0.16)
         }
-        return .black.opacity(task.isCompleted ? 0.1 : 0.16)
+        return colorTheme.neutralTone(for: colorScheme).opacity(task.isCompleted ? 0.15 : 0.23)
     }
 
     private var checkColor: Color {
         if task.isCompleted {
             return .secondary.opacity(0.7)
         }
-        return .primary.opacity(0.58)
+        if colorTheme.isCurrent {
+            return .primary.opacity(0.58)
+        }
+        return colorTheme.softTone(for: colorScheme).opacity(0.78)
     }
 
     private var dueDateColor: Color {
-        return isOverdue ? .red.opacity(0.82) : .secondary
+        if !task.hasDueDate {
+            return .secondary.opacity(0.82)
+        }
+        return isOverdue ? colorTheme.warningTone(for: colorScheme).opacity(0.9) : .secondary
     }
 
     private var isOverdue: Bool {
-        !task.isCompleted && daysFromToday < 0
+        guard let daysFromToday else { return false }
+        return !task.isCompleted && daysFromToday < 0
     }
 
-    private var daysFromToday: Int {
+    private var daysFromToday: Int? {
+        guard task.hasDueDate else { return nil }
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
         let dueDay = calendar.startOfDay(for: task.dueDate)
@@ -100,21 +123,26 @@ struct TaskRowView: View {
     }
 
     private var dueLabelText: String {
+        guard task.hasDueDate else {
+            return "no due date"
+        }
+
         let dateText = task.dueDate.formatted(.dateTime.month(.defaultDigits).day(.defaultDigits))
+        let dayDelta = daysFromToday ?? 0
 
         if task.isCompleted {
             return "due \(dateText)"
         }
 
-        if daysFromToday == 0 {
+        if dayDelta == 0 {
             return "due \(dateText) • today"
         }
-        if daysFromToday > 0 {
-            let dayWord = daysFromToday == 1 ? "day" : "days"
-            return "due \(dateText) • in \(daysFromToday) \(dayWord)"
+        if dayDelta > 0 {
+            let dayWord = dayDelta == 1 ? "day" : "days"
+            return "due \(dateText) • in \(dayDelta) \(dayWord)"
         }
 
-        let lateDays = abs(daysFromToday)
+        let lateDays = abs(dayDelta)
         let dayWord = lateDays == 1 ? "day" : "days"
         return "due \(dateText) • \(lateDays) \(dayWord) late"
     }

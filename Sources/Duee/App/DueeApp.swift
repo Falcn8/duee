@@ -1,32 +1,78 @@
-import AppKit
 import SwiftData
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+#endif
+
 @main
 struct DueeApp: App {
+#if os(macOS)
     @NSApplicationDelegateAdaptor(DueeAppDelegate.self) private var appDelegate
+#endif
     @AppStorage(DueePreferenceKeys.appearanceMode) private var appearanceModeRaw = DueeAppearanceMode.system.rawValue
+    @AppStorage(DueePreferenceKeys.colorThemeID) private var colorThemeID = DueeColorThemeCatalog.defaultThemeID
+    @AppStorage(DueePreferenceKeys.customThemeHexes) private var customThemeHexes = DueeColorThemeCatalog.defaultCustomThemeRawValue
+    private let modelContainer = DueeApp.makeModelContainer()
 
     var body: some Scene {
+#if os(macOS)
         Window("duee", id: "main") {
             DueeRootView()
                 .frame(minWidth: 360, minHeight: 48)
-                .preferredColorScheme(appearanceMode.colorScheme)
+                .preferredColorScheme(effectiveAppearanceMode.colorScheme)
+                .environment(\.dueeColorTheme, colorTheme)
         }
         .defaultSize(width: 390, height: 470)
         .windowResizability(.automatic)
         .windowStyle(.hiddenTitleBar)
-        .modelContainer(for: DueeTask.self)
+        .modelContainer(modelContainer)
         .commands {
             CommandGroup(replacing: .newItem) { }
         }
+#else
+        WindowGroup {
+            DueeRootView()
+                .preferredColorScheme(effectiveAppearanceMode.colorScheme)
+                .environment(\.dueeColorTheme, colorTheme)
+        }
+        .modelContainer(modelContainer)
+#endif
     }
 
-    private var appearanceMode: DueeAppearanceMode {
+    private var storedAppearanceMode: DueeAppearanceMode {
         DueeAppearanceMode(rawValue: appearanceModeRaw) ?? .system
+    }
+
+    private var effectiveAppearanceMode: DueeAppearanceMode {
+        if DueeColorThemeCatalog.normalizedThemeID(colorThemeID) != DueeColorThemeCatalog.defaultThemeID {
+            return .light
+        }
+        return storedAppearanceMode
+    }
+
+    private var colorTheme: DueeColorTheme {
+        DueeColorThemeCatalog.theme(for: colorThemeID, customThemeRaw: customThemeHexes)
+    }
+
+    private static func makeModelContainer() -> ModelContainer {
+        let schema = Schema([DueeTask.self])
+        let cloudConfiguration = ModelConfiguration(cloudKitDatabase: .automatic)
+        let localConfiguration = ModelConfiguration()
+
+        do {
+            return try ModelContainer(for: schema, configurations: [cloudConfiguration])
+        } catch {
+            do {
+                return try ModelContainer(for: schema, configurations: [localConfiguration])
+            } catch {
+                fatalError("Failed to initialize SwiftData store: \(error)")
+            }
+        }
     }
 }
 
+#if os(macOS)
 @MainActor
 final class DueeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let focusedBackgroundAlpha: CGFloat = 1.0
@@ -108,7 +154,7 @@ final class DueeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func applyBackgroundOpacity(to window: NSWindow, isFocused: Bool) {
         let alpha = isFocused ? focusedBackgroundAlpha : configuredUnfocusedBackgroundAlpha
-        let baseColor = isDarkAppearance(for: window) ? NSColor.black : NSColor.windowBackgroundColor
+        let baseColor = configuredColorTheme.windowBackgroundColor(isDark: isDarkAppearance(for: window))
         window.backgroundColor = baseColor.withAlphaComponent(alpha)
     }
 
@@ -135,11 +181,16 @@ final class DueeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return min(max(value, 0.35), 0.95)
     }
 
-    private func isDarkAppearance(for window: NSWindow) -> Bool {
-        let modeRaw = UserDefaults.standard.string(forKey: DueePreferenceKeys.appearanceMode)
-        let mode = DueeAppearanceMode(rawValue: modeRaw ?? DueeAppearanceMode.system.rawValue) ?? .system
+    private var configuredColorTheme: DueeColorTheme {
+        let themeID = UserDefaults.standard.string(forKey: DueePreferenceKeys.colorThemeID)
+            ?? DueeColorThemeCatalog.defaultThemeID
+        let customThemeRaw = UserDefaults.standard.string(forKey: DueePreferenceKeys.customThemeHexes)
+            ?? DueeColorThemeCatalog.defaultCustomThemeRawValue
+        return DueeColorThemeCatalog.theme(for: themeID, customThemeRaw: customThemeRaw)
+    }
 
-        switch mode {
+    private func isDarkAppearance(for window: NSWindow) -> Bool {
+        switch effectiveAppearanceMode {
         case .dark:
             return true
         case .light:
@@ -151,9 +202,7 @@ final class DueeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func applyAppAppearance() {
-        let modeRaw = UserDefaults.standard.string(forKey: DueePreferenceKeys.appearanceMode)
-        let mode = DueeAppearanceMode(rawValue: modeRaw ?? DueeAppearanceMode.system.rawValue) ?? .system
-        switch mode {
+        switch effectiveAppearanceMode {
         case .system:
             NSApp.appearance = nil
         case .light:
@@ -162,4 +211,18 @@ final class DueeAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSApp.appearance = NSAppearance(named: .darkAqua)
         }
     }
+
+    private var effectiveAppearanceMode: DueeAppearanceMode {
+        let storedModeRaw = UserDefaults.standard.string(forKey: DueePreferenceKeys.appearanceMode)
+        let storedMode = DueeAppearanceMode(rawValue: storedModeRaw ?? DueeAppearanceMode.system.rawValue) ?? .system
+        let storedThemeID = UserDefaults.standard.string(forKey: DueePreferenceKeys.colorThemeID)
+            ?? DueeColorThemeCatalog.defaultThemeID
+        let normalizedThemeID = DueeColorThemeCatalog.normalizedThemeID(storedThemeID)
+
+        if normalizedThemeID != DueeColorThemeCatalog.defaultThemeID {
+            return .light
+        }
+        return storedMode
+    }
 }
+#endif

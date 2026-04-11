@@ -27,6 +27,9 @@ enum PreviewSeed {
                 createdAt: calendar.date(byAdding: .day, value: -4, to: today) ?? today,
                 completedAt: calendar.date(byAdding: .hour, value: -5, to: .now)
             ),
+            DueeTask(
+                text: "来週の買い出しメモを作る"
+            ),
         ]
 
         for task in tasks {

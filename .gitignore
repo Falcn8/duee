@@ -22,3 +22,7 @@ xcuserdata/
 *.swp
 *.swo
 .netrc
+
+# Node / Web
+node_modules/
+.env

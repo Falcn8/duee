@@ -1,18 +1,31 @@
-import AppKit
 import SwiftData
 import SwiftUI
+
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 struct DueeRootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dueeColorTheme) private var colorTheme
     @Query private var tasks: [DueeTask]
 
     @AppStorage("minimalMode") private var minimalMode = false
     @AppStorage(DueePreferenceKeys.unfocusedBackgroundAlpha) private var unfocusedBackgroundAlpha = 0.78
     @AppStorage(DueePreferenceKeys.appearanceMode) private var appearanceModeRaw = DueeAppearanceMode.system.rawValue
+    @AppStorage(DueePreferenceKeys.colorThemeID) private var colorThemeID = DueeColorThemeCatalog.defaultThemeID
+    @AppStorage(DueePreferenceKeys.customThemeHexes) private var customThemeHexes = DueeColorThemeCatalog.defaultCustomThemeRawValue
 
     @State private var draftDueDate = Date()
+    @State private var draftHasDueDate = true
     @State private var draftText = ""
+    @State private var editingTask: DueeTask?
+    @State private var editingTaskText = ""
+    @State private var editingDueDate = Date()
+    @State private var editingHasDueDate = true
     @State private var isShowingSettings = false
     @State private var isCollapsed = false
     @State private var expandedWindowHeight: CGFloat = 470
@@ -25,13 +38,22 @@ struct DueeRootView: View {
         _tasks = Query(sort: [dueDateSort, createdSort], animation: .snappy(duration: 0.24))
     }
 
+    private var effectiveCollapsed: Bool {
+#if os(macOS)
+        return isCollapsed
+#else
+        return false
+#endif
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            if !isCollapsed {
+            if !effectiveCollapsed {
                 TaskComposerView(
                     dueDate: $draftDueDate,
+                    hasDueDate: $draftHasDueDate,
                     taskText: $draftText,
                     onAdd: createTask
                 )
@@ -55,12 +77,12 @@ struct DueeRootView: View {
         .frame(
             maxWidth: .infinity,
             maxHeight: .infinity,
-            alignment: isCollapsed ? .leading : .topLeading
+            alignment: effectiveCollapsed ? .leading : .topLeading
         )
-        .padding(.top, isCollapsed ? 4 : 11)
+        .padding(.top, effectiveCollapsed ? 4 : 11)
         .padding(.leading, 18)
         .padding(.trailing, 18)
-        .padding(.bottom, isCollapsed ? 4 : 18)
+        .padding(.bottom, effectiveCollapsed ? 4 : 18)
         .background(.clear)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
@@ -70,9 +92,11 @@ struct DueeRootView: View {
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .ignoresSafeArea(.container, edges: .top)
         .onTapGesture {
+#if os(macOS)
             if isCollapsed {
                 toggleCollapsedMode()
             }
+#endif
         }
         .simultaneousGesture(TapGesture().onEnded {
             clearInputFocus()
@@ -85,7 +109,18 @@ struct DueeRootView: View {
             DueeSettingsView(
                 minimalMode: $minimalMode,
                 unfocusedBackgroundAlpha: $unfocusedBackgroundAlpha,
-                appearanceMode: appearanceModeBinding
+                appearanceMode: appearanceModeBinding,
+                colorThemeID: $colorThemeID,
+                customThemeHexes: $customThemeHexes
+            )
+        }
+        .sheet(item: $editingTask) { _ in
+            EditTaskSheetView(
+                taskText: $editingTaskText,
+                dueDate: $editingDueDate,
+                hasDueDate: $editingHasDueDate,
+                onSave: saveEditedTask,
+                onCancel: { editingTask = nil }
             )
         }
     }
@@ -103,6 +138,14 @@ struct DueeRootView: View {
     }
 
     private func dueDateAscending(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
+        if lhs.hasDueDate != rhs.hasDueDate {
+            return lhs.hasDueDate && !rhs.hasDueDate
+        }
+
+        if !lhs.hasDueDate {
+            return lhs.createdAt < rhs.createdAt
+        }
+
         if lhs.dueDate == rhs.dueDate {
             return lhs.createdAt < rhs.createdAt
         }
@@ -121,15 +164,24 @@ struct DueeRootView: View {
     }
 
     private var rootStrokeColor: Color {
-        colorScheme == .dark ? .white.opacity(0.22) : .black.opacity(0.14)
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.22) : .black.opacity(0.14)
+        }
+        return colorTheme.neutralTone(for: colorScheme).opacity(colorScheme == .dark ? 0.24 : 0.18)
     }
 
     private var headerButtonFill: Color {
-        colorScheme == .dark ? .white.opacity(0.3) : .black.opacity(0.16)
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.3) : .black.opacity(0.16)
+        }
+        return colorTheme.surfaceTone(for: colorScheme).opacity(colorScheme == .dark ? 0.32 : 0.26)
     }
 
     private var headerButtonStroke: Color {
-        colorScheme == .dark ? .white.opacity(0.34) : .black.opacity(0.22)
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.34) : .black.opacity(0.22)
+        }
+        return colorTheme.softTone(for: colorScheme).opacity(colorScheme == .dark ? 0.45 : 0.34)
     }
 
     private var collapsedSummaryText: String {
@@ -137,7 +189,7 @@ struct DueeRootView: View {
         let today = calendar.startOfDay(for: .now)
 
         let dueTodayCount = activeTasks.filter { task in
-            calendar.isDate(task.dueDate, inSameDayAs: today)
+            task.hasDueDate && calendar.isDate(task.dueDate, inSameDayAs: today)
         }.count
 
         if dueTodayCount > 0 {
@@ -148,7 +200,7 @@ struct DueeRootView: View {
             return "all tasks done"
         }
 
-        let overdueCount = activeTasks.filter { $0.dueDate < today }.count
+        let overdueCount = activeTasks.filter { $0.hasDueDate && $0.dueDate < today }.count
         if overdueCount > 0 {
             return "\(overdueCount) overdue \(taskWord(for: overdueCount))"
         }
@@ -161,6 +213,7 @@ struct DueeRootView: View {
     }
 
     private var header: some View {
+#if os(macOS)
         HStack(alignment: .center, spacing: 8) {
             if isCollapsed {
                 VStack(alignment: .leading, spacing: 1) {
@@ -203,6 +256,22 @@ struct DueeRootView: View {
                 }
             }
         }
+#else
+        HStack(alignment: .center, spacing: 8) {
+            Text("duee")
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(0.1)
+
+            Spacer(minLength: 8)
+
+            headerCircleButton(
+                systemImage: "gearshape",
+                accessibilityText: "Open settings"
+            ) {
+                isShowingSettings = true
+            }
+        }
+#endif
     }
 
     private var activeSection: some View {
@@ -226,6 +295,7 @@ struct DueeRootView: View {
                         task: task,
                         namespace: rowAnimation,
                         onToggle: { toggleCompletion(for: task) },
+                        onEdit: { beginEditing(task) },
                         onDelete: { deleteTask(task) }
                     )
                     .transition(
@@ -253,6 +323,7 @@ struct DueeRootView: View {
                     task: task,
                     namespace: rowAnimation,
                     onToggle: { toggleCompletion(for: task) },
+                    onEdit: { beginEditing(task) },
                     onDelete: { deleteTask(task) }
                 )
                 .transition(.opacity)
@@ -266,7 +337,10 @@ struct DueeRootView: View {
         guard !cleaned.isEmpty else { return }
 
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
-            let item = DueeTask(dueDate: draftDueDate, text: cleaned)
+            let item = DueeTask(
+                dueDate: draftHasDueDate ? draftDueDate : nil,
+                text: cleaned
+            )
             modelContext.insert(item)
             draftText = ""
         }
@@ -283,6 +357,29 @@ struct DueeRootView: View {
                 task.markCompleted()
             }
         }
+        persist()
+    }
+
+    private func beginEditing(_ task: DueeTask) {
+        clearInputFocus()
+        editingTaskText = task.text
+        editingHasDueDate = task.hasDueDate
+        editingDueDate = task.dueDate
+        editingTask = task
+    }
+
+    private func saveEditedTask() {
+        guard let editingTask else { return }
+        let cleaned = editingTaskText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+
+        editingTask.text = cleaned
+        editingTask.hasDueDate = editingHasDueDate
+        if editingHasDueDate {
+            editingTask.dueDate = Calendar.current.startOfDay(for: editingDueDate)
+        }
+
+        self.editingTask = nil
         persist()
     }
 
@@ -303,9 +400,14 @@ struct DueeRootView: View {
     }
 
     private func clearInputFocus() {
+#if os(macOS)
         NSApp.keyWindow?.makeFirstResponder(nil)
+#elseif os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+#endif
     }
 
+#if os(macOS)
     private func toggleCollapsedMode() {
         clearInputFocus()
 
@@ -353,6 +455,7 @@ struct DueeRootView: View {
             ?? NSApp.windows.first(where: { $0.isVisible })
             ?? NSApp.windows.first
     }
+#endif
 
     private func headerCircleButton(
         systemImage: String,
@@ -382,6 +485,7 @@ struct DueeRootView: View {
         .accessibilityLabel(accessibilityText)
     }
 
+#if os(macOS)
     private func resize(
         window: NSWindow,
         toHeight newHeight: CGFloat,
@@ -395,10 +499,12 @@ struct DueeRootView: View {
         }
         window.setFrame(frame, display: true, animate: animate)
     }
+#endif
 }
 
 private struct EmptyStateCard: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dueeColorTheme) private var colorTheme
 
     let title: String
     let subtitle: String
@@ -427,11 +533,78 @@ private struct EmptyStateCard: View {
     }
 
     private var cardFill: Color {
-        colorScheme == .dark ? .white.opacity(0.14) : .black.opacity(0.06)
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.14) : .black.opacity(0.06)
+        }
+        return colorTheme.surfaceTone(for: colorScheme).opacity(colorScheme == .dark ? 0.28 : 0.2)
     }
 
     private var cardStroke: Color {
-        colorScheme == .dark ? .white.opacity(0.2) : .black.opacity(0.14)
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.2) : .black.opacity(0.14)
+        }
+        return colorTheme.neutralTone(for: colorScheme).opacity(colorScheme == .dark ? 0.22 : 0.15)
+    }
+}
+
+private struct EditTaskSheetView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dueeColorTheme) private var colorTheme
+
+    @Binding var taskText: String
+    @Binding var dueDate: Date
+    @Binding var hasDueDate: Bool
+
+    let onSave: () -> Void
+    let onCancel: () -> Void
+
+    private var canSave: Bool {
+        !taskText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Edit task")
+                .font(.system(size: 18, weight: .semibold))
+
+            TextField("Task text", text: $taskText)
+                .textFieldStyle(.roundedBorder)
+
+            Toggle("Set due date", isOn: $hasDueDate)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+            if hasDueDate {
+#if os(macOS)
+                DatePicker("Due date", selection: $dueDate, displayedComponents: [.date])
+                    .datePickerStyle(.field)
+                    .controlSize(.small)
+#else
+                DatePicker("Due date", selection: $dueDate, displayedComponents: [.date])
+                    .datePickerStyle(.compact)
+#endif
+            }
+
+            HStack {
+                Spacer(minLength: 0)
+
+                Button("Cancel", action: onCancel)
+
+                Button("Save", action: onSave)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(18)
+        .frame(width: 320)
+        .tint(sheetAccent)
+    }
+
+    private var sheetAccent: Color {
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.86)
+        }
+        return colorTheme.accentTone(for: colorScheme).opacity(0.96)
     }
 }
 

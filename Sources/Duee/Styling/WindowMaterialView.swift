@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -19,3 +20,4 @@ struct WindowMaterialView: NSViewRepresentable {
         nsView.blendingMode = blendingMode
     }
 }
+#endif

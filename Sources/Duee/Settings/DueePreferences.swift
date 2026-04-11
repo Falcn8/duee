@@ -33,4 +33,6 @@ enum DueeAppearanceMode: String, CaseIterable, Identifiable {
 enum DueePreferenceKeys {
     static let appearanceMode = "appearanceMode"
     static let unfocusedBackgroundAlpha = "unfocusedBackgroundAlpha"
+    static let colorThemeID = "colorThemeID"
+    static let customThemeHexes = "customThemeHexes"
 }

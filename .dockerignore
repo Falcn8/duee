@@ -1,0 +1,7 @@
+.git
+.gitignore
+.build
+.swiftpm
+.DS_Store
+node_modules
+npm-debug.log

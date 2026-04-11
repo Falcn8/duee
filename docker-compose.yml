@@ -1,0 +1,25 @@
+services:
+  app:
+    build:
+      context: /opt/apps/duee
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    command: ["npm", "start"]
+    networks:
+      - web
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.duee.rule=Host(`${HOSTNAME}`)"
+      - "traefik.http.routers.duee.entrypoints=websecure"
+      - "traefik.http.routers.duee.tls=true"
+      - "traefik.http.routers.duee.tls.certresolver=le"
+      - "traefik.http.services.duee.loadbalancer.server.port=8000"
+
+networks:
+  web:
+    external: true
+  internal:
+    external: true

@@ -7,6 +7,7 @@ let package = Package(
     name: "Duee",
     platforms: [
         .macOS(.v14),
+        .iOS(.v17),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.

@@ -5,6 +5,7 @@ import SwiftData
 final class DueeTask {
     @Attribute(.unique) var id: UUID
     var dueDate: Date
+    var hasDueDate: Bool = true
     var text: String
     var isCompleted: Bool
     var createdAt: Date
@@ -12,14 +13,15 @@ final class DueeTask {
 
     init(
         id: UUID = UUID(),
-        dueDate: Date,
+        dueDate: Date? = nil,
         text: String,
         isCompleted: Bool = false,
         createdAt: Date = .now,
         completedAt: Date? = nil
     ) {
         self.id = id
-        self.dueDate = Calendar.current.startOfDay(for: dueDate)
+        self.dueDate = Calendar.current.startOfDay(for: dueDate ?? .now)
+        self.hasDueDate = dueDate != nil
         self.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         self.isCompleted = isCompleted
         self.createdAt = createdAt
