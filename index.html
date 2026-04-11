@@ -2,250 +2,271 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>duee</title>
-  <meta name="description" content="duee is a calm, native macOS utility for due-date tasks." />
-  <style>
-    :root {
-      --bg: #f3f2ee;
-      --bg-soft: #e8e7e1;
-      --text: #101216;
-      --muted: #5b6572;
-      --line: rgba(16, 18, 22, 0.14);
-      --panel: rgba(255, 255, 255, 0.76);
-      --panel-strong: rgba(255, 255, 255, 0.9);
-      --radius: 18px;
-      --shadow: 0 24px 54px rgba(16, 18, 22, 0.14);
-      --max: 980px;
-    }
-
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #0f1114;
-        --bg-soft: #15181d;
-        --text: #eef2f8;
-        --muted: #a9b2be;
-        --line: rgba(255, 255, 255, 0.18);
-        --panel: rgba(22, 25, 30, 0.74);
-        --panel-strong: rgba(22, 25, 30, 0.86);
-        --shadow: 0 24px 54px rgba(0, 0, 0, 0.42);
-      }
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 17px;
-      color: var(--text);
-      background:
-        radial-gradient(680px 380px at -10% -10%, rgba(120, 138, 160, 0.18), transparent 60%),
-        radial-gradient(620px 360px at 108% 2%, rgba(120, 138, 160, 0.14), transparent 62%),
-        linear-gradient(180deg, var(--bg) 0%, var(--bg-soft) 100%);
-      min-height: 100vh;
-      line-height: 1.45;
-    }
-
-    a { color: inherit; text-decoration: none; }
-
-    .wrap {
-      width: min(calc(100% - 2rem), var(--max));
-      margin: 0 auto;
-    }
-
-    header {
-      height: 3.6rem;
-    }
-
-    main {
-      display: grid;
-      grid-template-columns: 1.02fr 0.98fr;
-      gap: 1.3rem;
-      align-items: center;
-      padding: 1.3rem 0 2.4rem;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: clamp(2.45rem, 7.6vw, 4.4rem);
-      letter-spacing: -0.05em;
-      line-height: 0.93;
-    }
-
-    .sub {
-      margin: 0.8rem 0 1rem;
-      color: var(--muted);
-      font-size: clamp(1.08rem, 2.2vw, 1.25rem);
-      max-width: 32ch;
-    }
-
-    .mini-list {
-      margin: 0;
-      padding-left: 1rem;
-      color: var(--muted);
-      display: grid;
-      gap: 0.34rem;
-      font-size: 1rem;
-    }
-
-    .card {
-      border: 1px solid var(--line);
-      background: var(--panel);
-      border-radius: 24px;
-      box-shadow: var(--shadow);
-      padding: 0.96rem;
-      backdrop-filter: blur(10px);
-    }
-
-    .window {
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      overflow: hidden;
-      background: var(--panel-strong);
-    }
-
-    .window-top {
-      height: 34px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      gap: 0.36rem;
-      padding: 0 0.72rem;
-    }
-
-    .dot {
-      width: 0.56rem;
-      height: 0.56rem;
-      border-radius: 50%;
-      border: 1px solid var(--line);
-      background: transparent;
-    }
-
-    .rows {
-      padding: 0.84rem;
-      display: grid;
-      gap: 0.58rem;
-    }
-
-    .row {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 0.58rem 0.68rem;
-      background: color-mix(in srgb, var(--panel-strong) 84%, transparent);
-    }
-
-    .row strong {
-      display: block;
-      font-size: 0.97rem;
-      font-weight: 590;
-      margin-bottom: 0.24rem;
-      letter-spacing: -0.01em;
-    }
-
-    .row span {
-      font-size: 0.84rem;
-      color: var(--muted);
-    }
-
-    .row span.late { color: #c7403b; }
-
-    .mini {
-      margin-top: 0.64rem;
-      border: 1px dashed var(--line);
-      border-radius: 12px;
-      padding: 0.52rem 0.66rem;
-      font-size: 0.84rem;
-      color: var(--muted);
-      display: flex;
-      justify-content: space-between;
-      gap: 0.6rem;
-      flex-wrap: wrap;
-    }
-
-    footer {
-      border-top: 1px solid var(--line);
-      padding: 1.05rem 0 1.35rem;
-      color: var(--muted);
-      font-size: 0.9rem;
-      display: flex;
-      justify-content: space-between;
-      gap: 0.7rem;
-      flex-wrap: wrap;
-    }
-
-    .footer-github {
-      display: inline-flex;
-      align-items: center;
-      color: var(--muted);
-    }
-
-    .footer-github svg {
-      width: 1.26rem;
-      height: 1.26rem;
-      fill: currentColor;
-      display: block;
-    }
-
-    @media (max-width: 860px) {
-      main {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f4f4f5" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="duee" />
+  <title>duee web</title>
+  <meta name="description" content="A mobile-friendly due-date task list you can add to your iPhone home screen." />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
-  <div class="wrap">
-    <header aria-hidden="true"></header>
-
-    <main>
-      <section>
-        <h1>duee</h1>
-        <p class="sub">A calm floating utility for due-date tasks on macOS.</p>
-        <ul class="mini-list">
-          <li>date + task, then Return</li>
-          <li>closest deadlines first</li>
-          <li>one-click complete</li>
-        </ul>
+  <main class="app-shell" aria-label="duee mobile web app">
+    <header class="masthead">
+      <h1>
+        <button id="homeButton" class="home-button" type="button" aria-label="Go to task list">duee</button>
+      </h1>
+      <section id="accountBar" class="account-bar" aria-label="Account" hidden>
+        <button
+          id="accountIdentity"
+          type="button"
+          class="account-identity"
+          aria-label="Open profile"
+          title=""
+        >
+          <svg class="icon icon-user" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 12.4a4.7 4.7 0 1 0 0-9.4 4.7 4.7 0 0 0 0 9.4Z" />
+            <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
+          </svg>
+          <span id="accountDisplayName" class="account-name"></span>
+        </button>
+        <button id="logoutButton" type="button" class="icon-button logout-button" aria-label="Sign out" title="Sign out">
+          <svg class="icon icon-logout" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10.5 4.5H7A2.5 2.5 0 0 0 4.5 7v10A2.5 2.5 0 0 0 7 19.5h3.5" />
+            <path d="M14 8.5 18.5 12 14 15.5M18 12H9" />
+          </svg>
+        </button>
       </section>
+    </header>
 
-      <section class="card" aria-label="duee preview">
-        <div class="window">
-          <div class="window-top">
-            <span class="dot"></span>
-            <span class="dot"></span>
-            <span class="dot"></span>
+    <section id="authPanel" class="auth-panel" aria-label="Sign in" hidden>
+      <h2 id="authTitle">Sign in</h2>
+      <p id="authHint" class="auth-hint">Sign in to sync your tasks across devices.</p>
+      <form id="authForm" class="auth-form">
+        <label id="authDisplayNameField" class="field" hidden>
+          <span class="field-label auth-field-label">Display name</span>
+          <input id="authDisplayName" type="text" autocomplete="nickname" maxlength="48" />
+        </label>
+        <label class="field">
+          <span class="field-label auth-field-label">Email</span>
+          <input id="authEmail" type="email" autocomplete="email" required />
+        </label>
+        <label class="field">
+          <span class="field-label auth-field-label">Password</span>
+          <input id="authPassword" type="password" autocomplete="current-password" minlength="8" required />
+        </label>
+        <button id="authSubmit" class="add auth-submit" type="submit">Sign in</button>
+      </form>
+      <p
+        id="authStatus"
+        class="auth-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden
+      ></p>
+      <p class="auth-switch-copy">
+        <span id="authSwitchPrefix">Need an account?</span>
+        <button id="authSwitchButton" type="button" class="text-button">Create account</button>
+      </p>
+    </section>
+
+    <button id="profileBackButton" class="profile-back-link text-button" type="button" hidden>
+      ← Back to tasks
+    </button>
+
+    <section id="profilePage" class="profile-page" aria-label="Profile settings" hidden>
+      <header class="profile-head">
+        <h2>Profile</h2>
+        <p class="auth-hint">View your account info and update settings.</p>
+      </header>
+      <form id="profileForm" class="profile-form">
+        <label class="field">
+          <span class="field-label auth-field-label">Display name</span>
+          <input id="profileDisplayName" type="text" autocomplete="nickname" maxlength="48" required />
+        </label>
+        <div class="profile-meta-grid" aria-label="Account information">
+          <div class="profile-meta">
+            <p class="field-label auth-field-label">Email</p>
+            <p id="profileEmail" class="profile-meta-value"></p>
           </div>
-          <div class="rows">
-            <div class="row">
-              <strong>linear algebra worksheet</strong>
-              <span>due 4/10 • in 1 day</span>
-            </div>
-            <div class="row">
-              <strong>economics memo</strong>
-              <span class="late">due 4/8 • 1 day late</span>
-            </div>
-            <div class="row">
-              <strong>lab report draft</strong>
-              <span>due 4/14 • in 5 days</span>
-            </div>
+          <div class="profile-meta">
+            <p class="field-label auth-field-label">Account created</p>
+            <p id="profileCreatedAt" class="profile-meta-value"></p>
+          </div>
+          <div class="profile-meta">
+            <p class="field-label auth-field-label">User ID</p>
+            <p id="profileUserId" class="profile-meta-value"></p>
           </div>
         </div>
-        <div class="mini">
-          <span>minimized: duee</span>
-          <strong>2 tasks left to do today</strong>
+        <p
+          id="profileStatus"
+          class="auth-status profile-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          hidden
+        ></p>
+        <div class="profile-actions">
+          <button id="profileSaveButton" class="add profile-save" type="submit">Save changes</button>
+        </div>
+      </form>
+    </section>
+
+    <div id="tasksShell" class="tasks-shell" hidden>
+      <section class="composer" aria-label="Add task">
+        <div class="composer-track">
+          <label class="date-chip">
+            <svg class="icon icon-calendar" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="16" rx="2.25" />
+              <path d="M8 3.5v3M16 3.5v3M3.5 9.5h17M8 13.2h2.25M12.1 13.2h2.25M16.2 13.2h2.25M8 17h2.25M12.1 17h2.25" />
+            </svg>
+            <button id="dueDateSelect" class="date-select" type="button">Select date</button>
+            <input id="dueDateInput" class="native-date-input" type="date" />
+            <button id="dueDateToggle" class="due-toggle" type="button" aria-pressed="true" aria-label="Remove due date">No date</button>
+          </label>
+          <label class="task-field">
+            <svg class="icon icon-compose" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14.4 4.8 19.2 9.6M8.35 19.4l-3.75.75.75-3.75L16.75 5a1.6 1.6 0 0 1 2.27 0l.98.98a1.6 1.6 0 0 1 0 2.27L8.35 19.4Z" />
+              <path d="M3.85 3.9h6.8M3.85 8.9h4.6" />
+            </svg>
+            <input id="taskInput" type="text" placeholder="Add a task" maxlength="240" autocomplete="off" />
+          </label>
+          <button id="addButton" class="add" type="button" aria-label="Add task">
+            <svg class="icon icon-arrow-up" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 18V6M7 11l5-5 5 5" />
+            </svg>
+          </button>
         </div>
       </section>
-    </main>
 
-    <footer>
-      <a class="footer-github" href="https://github.com/Falcn8/duee" target="_blank" rel="noreferrer" aria-label="GitHub repository">
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.77.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.5-2.01.38-2.53-.51-2.69-.98-.09-.24-.48-.98-.82-1.18-.28-.16-.68-.55-.01-.56.63-.01 1.08.6 1.23.85.72 1.27 1.87.91 2.33.7.07-.54.28-.91.5-1.12-1.78-.21-3.64-.92-3.64-4.09 0-.9.31-1.64.82-2.22-.08-.21-.36-1.06.08-2.2 0 0 .67-.22 2.2.85a7.33 7.33 0 0 1 4 0c1.53-1.07 2.2-.85 2.2-.85.44 1.14.16 1.99.08 2.2.51.58.82 1.31.82 2.22 0 3.18-1.87 3.88-3.65 4.09.29.26.54.76.54 1.54 0 1.11-.01 2-.01 2.28 0 .21.15.47.55.39A8.21 8.21 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z"/>
-        </svg>
-      </a>
-      <span>© 2026 Falcn8</span>
-    </footer>
+      <div class="tasks-content">
+        <div class="tasks-main">
+          <div class="section-divider" aria-hidden="true"></div>
+
+          <section class="stack" aria-label="Upcoming tasks">
+            <div class="section-head">
+              <h2>Upcoming</h2>
+            </div>
+            <ul id="activeList" class="task-list"></ul>
+            <p id="emptyUpcoming" class="empty-copy">Nothing due yet. Add your first task above.</p>
+          </section>
+
+          <section class="stack" aria-label="Completed tasks">
+            <div class="section-head">
+              <h2>Done</h2>
+            </div>
+            <ul id="doneList" class="task-list"></ul>
+            <p id="emptyDone" class="empty-copy">Completed tasks show up here.</p>
+          </section>
+        </div>
+
+        <aside class="tasks-side" aria-label="Task status panel">
+          <section id="statusPanel" class="summary" aria-live="polite" hidden>
+            <p id="statusLine" class="status-line" hidden></p>
+            <div id="statusActions" class="status-actions" hidden>
+              <button id="statusRetry" type="button" class="ghost status-action">Retry sync</button>
+              <button id="statusSignIn" type="button" class="ghost status-action">Sign in</button>
+            </div>
+          </section>
+
+          <aside id="installHint" class="install-hint" hidden>
+            <p><strong>Install on iPhone:</strong> Safari <span aria-hidden="true">→</span> Share <span aria-hidden="true">→</span> Add to Home Screen.</p>
+            <button id="closeInstallHint" type="button" class="linky">Hide</button>
+          </aside>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <div
+    id="calendarDialog"
+    class="calendar-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="calendarMonthLabel"
+    tabindex="-1"
+    hidden
+  >
+    <section class="calendar-panel">
+      <header class="calendar-header">
+        <button id="calendarPrev" class="calendar-nav" type="button" aria-label="Previous month">‹</button>
+        <p id="calendarMonthLabel" class="calendar-month"></p>
+        <button id="calendarNext" class="calendar-nav" type="button" aria-label="Next month">›</button>
+      </header>
+      <div class="calendar-weekdays" aria-hidden="true">
+        <span>Su</span>
+        <span>Mo</span>
+        <span>Tu</span>
+        <span>We</span>
+        <span>Th</span>
+        <span>Fr</span>
+        <span>Sa</span>
+      </div>
+      <div
+        id="calendarGrid"
+        class="calendar-grid"
+        role="grid"
+        aria-label="Calendar days"
+        aria-activedescendant=""
+      ></div>
+      <footer class="calendar-actions">
+        <button id="calendarToday" class="ghost" type="button">Today</button>
+        <button id="calendarClear" class="ghost" type="button">No date</button>
+        <button id="calendarDone" class="add calendar-done" type="button">Done</button>
+      </footer>
+    </section>
   </div>
+
+  <dialog id="editDialog" class="edit-dialog">
+    <form method="dialog" class="edit-form" id="editForm">
+      <h3>Edit task</h3>
+      <label class="field">
+        <span class="field-label">Task</span>
+        <input id="editTaskInput" type="text" maxlength="240" required />
+      </label>
+      <div class="composer-row">
+        <label class="field">
+          <span class="field-label">Due</span>
+          <button id="editDueDateSelect" class="date-select date-select-edit" type="button">Select date</button>
+          <input id="editDueDateInput" class="native-date-input" type="date" />
+        </label>
+        <button id="editDueToggle" class="ghost" type="button" aria-pressed="true">Use date</button>
+      </div>
+      <div class="dialog-actions">
+        <button class="ghost" type="button" id="cancelEdit">Cancel</button>
+        <button class="add" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="taskTemplate">
+    <li class="task-card">
+      <button class="toggle" data-action="toggle" type="button" aria-label="Toggle completion"></button>
+      <div class="task-copy">
+        <p class="task-text"></p>
+        <p class="task-meta"></p>
+      </div>
+      <div class="task-actions">
+        <button class="linky edit" data-action="edit" type="button" aria-label="Edit task">
+          <svg class="icon icon-edit" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4.25 19.75 5 16l10.75-10.75a1.6 1.6 0 0 1 2.27 0l.73.73a1.6 1.6 0 0 1 0 2.27L8 19l-3.75.75Z" />
+          </svg>
+        </button>
+        <button class="linky danger remove" data-action="remove" type="button" aria-label="Delete task">
+          <svg class="icon icon-trash" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 7.5h14M9 7.5V5.8a.8.8 0 0 1 .8-.8h4.4a.8.8 0 0 1 .8.8v1.7M7.1 7.5l.9 11.2a.9.9 0 0 0 .9.8h6.2a.9.9 0 0 0 .9-.8L17 7.5" />
+            <path d="M10.25 11v5.2M13.75 11v5.2" />
+          </svg>
+        </button>
+      </div>
+    </li>
+  </template>
+
+  <script src="./app.js" defer></script>
 </body>
 </html>
