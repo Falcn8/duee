@@ -85,36 +85,88 @@
         <p class="auth-hint">View your account info and update settings.</p>
       </header>
       <form id="profileForm" class="profile-form">
-        <label class="field">
-          <span class="field-label auth-field-label">Display name</span>
-          <input id="profileDisplayName" type="text" autocomplete="nickname" maxlength="48" required />
-        </label>
-        <div class="profile-meta-grid" aria-label="Account information">
-          <div class="profile-meta">
-            <p class="field-label auth-field-label">Email</p>
-            <p id="profileEmail" class="profile-meta-value"></p>
+        <section class="profile-card" aria-label="Profile information">
+          <div class="profile-meta-grid" aria-label="Account information">
+            <div class="profile-meta">
+              <div class="profile-meta-head">
+                <p class="field-label auth-field-label">Display name</p>
+                <button id="profileEditButton" type="button" class="text-button profile-edit-button">Edit</button>
+              </div>
+              <p id="profileDisplayNameValue" class="profile-meta-value"></p>
+              <div id="profileDisplayNameEditor" class="profile-inline-editor" hidden>
+                <input id="profileDisplayNameInput" type="text" autocomplete="nickname" maxlength="48" required />
+                <div class="profile-actions profile-edit-actions">
+                  <button id="profileCancelEditButton" class="ghost profile-cancel" type="button">Cancel</button>
+                  <button id="profileSaveButton" class="add profile-save" type="submit">Save changes</button>
+                </div>
+              </div>
+            </div>
+            <div class="profile-meta">
+              <p class="field-label auth-field-label">Email</p>
+              <p id="profileEmail" class="profile-meta-value"></p>
+            </div>
+            <div class="profile-meta">
+              <p class="field-label auth-field-label">Account created</p>
+              <p id="profileCreatedAt" class="profile-meta-value"></p>
+            </div>
+            <div class="profile-meta">
+              <p class="field-label auth-field-label">User ID</p>
+              <p id="profileUserId" class="profile-meta-value"></p>
+            </div>
           </div>
-          <div class="profile-meta">
-            <p class="field-label auth-field-label">Account created</p>
-            <p id="profileCreatedAt" class="profile-meta-value"></p>
-          </div>
-          <div class="profile-meta">
-            <p class="field-label auth-field-label">User ID</p>
-            <p id="profileUserId" class="profile-meta-value"></p>
-          </div>
-        </div>
-        <p
-          id="profileStatus"
-          class="auth-status profile-status"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          hidden
-        ></p>
-        <div class="profile-actions">
-          <button id="profileSaveButton" class="add profile-save" type="submit">Save changes</button>
-        </div>
+          <p
+            id="profileStatus"
+            class="auth-status profile-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          ></p>
+        </section>
       </form>
+      <section class="settings-card" aria-label="Settings">
+        <header class="settings-head">
+          <h3>Settings</h3>
+          <p class="auth-hint">Adjust how duee behaves on this account.</p>
+        </header>
+        <div class="settings-list">
+          <label class="pref-row" for="profileHideDoneToggle">
+            <span class="pref-copy">
+              <span class="pref-title">Hide done tasks</span>
+              <span class="pref-hint">Show only upcoming tasks in your main list.</span>
+            </span>
+            <input id="profileHideDoneToggle" class="pref-switch" type="checkbox" role="switch" />
+          </label>
+          <label class="pref-row" for="profileReceiveUpdatesToggle">
+            <span class="pref-copy">
+              <span class="pref-title">Receive updates</span>
+              <span class="pref-hint">Get product updates and release notes by email.</span>
+            </span>
+            <input id="profileReceiveUpdatesToggle" class="pref-switch" type="checkbox" role="switch" />
+          </label>
+          <label class="pref-row" for="profileConfirmDeleteToggle">
+            <span class="pref-copy">
+              <span class="pref-title">Confirm before deleting tasks</span>
+              <span class="pref-hint">Show a confirmation prompt before removing a task.</span>
+            </span>
+            <input id="profileConfirmDeleteToggle" class="pref-switch" type="checkbox" role="switch" />
+          </label>
+          <label class="pref-row" for="profileHorizontalSectionsToggle">
+            <span class="pref-copy">
+              <span class="pref-title">Side-by-side sections on large screens</span>
+              <span class="pref-hint">Show Upcoming and Done in two equal-height columns instead of a vertical stack.</span>
+            </span>
+            <input id="profileHorizontalSectionsToggle" class="pref-switch" type="checkbox" role="switch" />
+          </label>
+          <label class="pref-row" for="profileSideCalendarToggle">
+            <span class="pref-copy">
+              <span class="pref-title">Show side calendar</span>
+              <span class="pref-hint">Display the due-date calendar in the right panel.</span>
+            </span>
+            <input id="profileSideCalendarToggle" class="pref-switch" type="checkbox" role="switch" />
+          </label>
+        </div>
+      </section>
     </section>
 
     <div id="tasksShell" class="tasks-shell" hidden>
@@ -144,8 +196,8 @@
         </div>
       </section>
 
-      <div class="tasks-content">
-        <div class="tasks-main">
+      <div id="tasksContent" class="tasks-content">
+        <div id="tasksMain" class="tasks-main">
           <div class="section-divider" aria-hidden="true"></div>
 
           <section class="stack" aria-label="Upcoming tasks">
@@ -173,11 +225,30 @@
               <button id="statusSignIn" type="button" class="ghost status-action">Sign in</button>
             </div>
           </section>
-
-          <aside id="installHint" class="install-hint" hidden>
-            <p><strong>Install on iPhone:</strong> Safari <span aria-hidden="true">→</span> Share <span aria-hidden="true">→</span> Add to Home Screen.</p>
-            <button id="closeInstallHint" type="button" class="linky">Hide</button>
-          </aside>
+          <section id="sideCalendarCard" class="side-calendar" aria-label="Due-date calendar">
+            <header class="side-calendar-head">
+              <div class="side-calendar-month-wrap">
+                <h3 id="sideCalendarMonthLabel" class="side-calendar-month"></h3>
+              </div>
+              <div class="side-calendar-actions">
+                <button id="sideCalendarPrev" type="button" class="icon-button side-calendar-nav" aria-label="Previous month">‹</button>
+                <button id="sideCalendarNext" type="button" class="icon-button side-calendar-nav" aria-label="Next month">›</button>
+              </div>
+            </header>
+            <div id="sideCalendarBody" class="side-calendar-body">
+              <div class="side-calendar-weekdays" aria-hidden="true">
+                <span>Su</span>
+                <span>Mo</span>
+                <span>Tu</span>
+                <span>We</span>
+                <span>Th</span>
+                <span>Fr</span>
+                <span>Sa</span>
+              </div>
+              <div id="sideCalendarGrid" class="side-calendar-grid" role="grid" aria-label="Task due calendar"></div>
+              <div id="sideCalendarDetails" class="side-calendar-details" role="status" aria-live="polite" hidden></div>
+            </div>
+          </section>
         </aside>
       </div>
     </div>

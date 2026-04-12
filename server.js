@@ -34,6 +34,13 @@ const ISO_DAY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SESSION_COOKIE_NAME = "duee_session";
 const SESSION_TTL_MS = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
+const DEFAULT_USER_PREFERENCES = Object.freeze({
+  hideDone: false,
+  receiveUpdates: true,
+  confirmDeletes: true,
+  horizontalTaskSections: true,
+  sideCalendarVisible: true,
+});
 
 if (!DEBUG_LOCAL_STORAGE && !DB_USER) {
   throw new Error("Missing DB_USER environment variable.");
@@ -214,6 +221,30 @@ app.patch("/api/auth/profile", requireDatabaseMode, requireAuth, async (req, res
     res.json({
       user: toApiUser(req.authUser),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/prefs", requireDatabaseMode, requireAuth, async (req, res, next) => {
+  try {
+    const prefs = await getUserPreferences(req.authUser.id);
+    res.json({ prefs });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/prefs", requireDatabaseMode, requireAuth, async (req, res, next) => {
+  try {
+    const patch = normalizePreferencePatch(req.body);
+    const current = await getUserPreferences(req.authUser.id);
+    const merged = {
+      ...current,
+      ...patch,
+    };
+    const prefs = await saveUserPreferences(req.authUser.id, merged);
+    res.json({ prefs });
   } catch (error) {
     next(error);
   }
@@ -573,6 +604,21 @@ async function ensureSchema() {
     `
   );
 
+  await pool.query(
+    `
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      user_id CHAR(36) NOT NULL PRIMARY KEY,
+      hide_done TINYINT(1) NOT NULL DEFAULT 0,
+      receive_updates TINYINT(1) NOT NULL DEFAULT 1,
+      confirm_deletes TINYINT(1) NOT NULL DEFAULT 1,
+      horizontal_task_sections TINYINT(1) NOT NULL DEFAULT 1,
+      side_calendar_visible TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `
+  );
+
   await ensureTaskUserIdColumn();
 
   await ensureIndex(
@@ -701,6 +747,77 @@ async function getTaskById(taskId, userId, raw = false) {
     return null;
   }
   return raw ? rows[0] : toApiTask(rows[0]);
+}
+
+async function getUserPreferences(userId) {
+  const [rows] = await pool.query(
+    `
+    SELECT hide_done, receive_updates, confirm_deletes, horizontal_task_sections, side_calendar_visible
+    FROM user_preferences
+    WHERE user_id = ?
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  if (rows.length === 0) {
+    return {
+      ...DEFAULT_USER_PREFERENCES,
+    };
+  }
+
+  return toApiPreferences(rows[0]);
+}
+
+async function saveUserPreferences(userId, prefs) {
+  await pool.query(
+    `
+    INSERT INTO user_preferences (
+      user_id, hide_done, receive_updates, confirm_deletes, horizontal_task_sections, side_calendar_visible
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      hide_done = VALUES(hide_done),
+      receive_updates = VALUES(receive_updates),
+      confirm_deletes = VALUES(confirm_deletes),
+      horizontal_task_sections = VALUES(horizontal_task_sections),
+      side_calendar_visible = VALUES(side_calendar_visible)
+    `,
+    [
+      userId,
+      prefs.hideDone ? 1 : 0,
+      prefs.receiveUpdates ? 1 : 0,
+      prefs.confirmDeletes ? 1 : 0,
+      prefs.horizontalTaskSections ? 1 : 0,
+      prefs.sideCalendarVisible ? 1 : 0,
+    ]
+  );
+
+  return getUserPreferences(userId);
+}
+
+function normalizePreferencePatch(value) {
+  if (!value || typeof value !== "object") {
+    throw badRequest("Invalid preferences payload.");
+  }
+
+  const patch = {};
+  if (value.hideDone !== undefined) {
+    patch.hideDone = Boolean(value.hideDone);
+  }
+  if (value.receiveUpdates !== undefined) {
+    patch.receiveUpdates = Boolean(value.receiveUpdates);
+  }
+  if (value.confirmDeletes !== undefined) {
+    patch.confirmDeletes = Boolean(value.confirmDeletes);
+  }
+  if (value.horizontalTaskSections !== undefined) {
+    patch.horizontalTaskSections = Boolean(value.horizontalTaskSections);
+  }
+  if (value.sideCalendarVisible !== undefined) {
+    patch.sideCalendarVisible = Boolean(value.sideCalendarVisible);
+  }
+  return patch;
 }
 
 function normalizeTaskText(value) {
@@ -953,6 +1070,26 @@ function toApiUser(user) {
     email: user.email,
     displayName: user.displayName,
     createdAt: user.createdAt ?? null,
+  };
+}
+
+function toApiPreferences(row) {
+  return {
+    hideDone: row.hide_done === undefined
+      ? DEFAULT_USER_PREFERENCES.hideDone
+      : Boolean(row.hide_done),
+    receiveUpdates: row.receive_updates === undefined
+      ? DEFAULT_USER_PREFERENCES.receiveUpdates
+      : Boolean(row.receive_updates),
+    confirmDeletes: row.confirm_deletes === undefined
+      ? DEFAULT_USER_PREFERENCES.confirmDeletes
+      : Boolean(row.confirm_deletes),
+    horizontalTaskSections: row.horizontal_task_sections === undefined
+      ? DEFAULT_USER_PREFERENCES.horizontalTaskSections
+      : Boolean(row.horizontal_task_sections),
+    sideCalendarVisible: row.side_calendar_visible === undefined
+      ? DEFAULT_USER_PREFERENCES.sideCalendarVisible
+      : Boolean(row.side_calendar_visible),
   };
 }
 

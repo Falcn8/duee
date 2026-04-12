@@ -246,6 +246,15 @@ h1 {
   gap: 0.5rem;
 }
 
+.profile-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--control);
+  padding: 0.62rem 0.66rem 0.66rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
 .profile-meta-grid {
   display: grid;
   gap: 0.4rem;
@@ -260,11 +269,136 @@ h1 {
   gap: 0.2rem;
 }
 
+.profile-meta-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.profile-edit-button {
+  min-height: auto;
+  padding: 0.08rem 0.1rem;
+  font-size: 0.74rem;
+}
+
 .profile-meta-value {
   font-size: 0.8rem;
   color: var(--ink-soft);
   overflow-wrap: anywhere;
   line-height: 1.35;
+}
+
+.profile-inline-editor {
+  margin-top: 0.14rem;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent 30%);
+  padding-top: 0.42rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.profile-cancel {
+  border-radius: 10px;
+  padding: 0.5rem 0.8rem;
+  min-height: 2.75rem;
+  font-size: 0.82rem;
+}
+
+.settings-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--control);
+  padding: 0.62rem 0.66rem 0.66rem;
+  display: grid;
+  gap: 0.52rem;
+}
+
+.settings-head {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.settings-head h3 {
+  font-size: 0.9rem;
+  font-weight: 640;
+  color: var(--ink);
+}
+
+.settings-list {
+  display: grid;
+  gap: 0;
+}
+
+.pref-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.72rem;
+  padding-block: 0.38rem;
+}
+
+.settings-list .pref-row + .pref-row {
+  border-top: 1px solid color-mix(in srgb, var(--line) 74%, transparent 26%);
+}
+
+.pref-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.14rem;
+}
+
+.pref-title {
+  font-size: 0.84rem;
+  font-weight: 620;
+  color: var(--ink);
+}
+
+.pref-hint {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+
+.pref-switch {
+  appearance: none;
+  width: 2.9rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  position: relative;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.pref-switch::before {
+  content: "";
+  position: absolute;
+  top: 0.17rem;
+  left: 0.18rem;
+  width: 1.18rem;
+  height: 1.18rem;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  transition: transform 140ms ease;
+}
+
+.pref-switch:checked {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.pref-switch:checked::before {
+  transform: translateX(1.18rem);
+  background: var(--brand-contrast);
+  border-color: color-mix(in srgb, var(--brand-contrast) 60%, var(--line) 40%);
+}
+
+.pref-switch:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .profile-status {
@@ -309,7 +443,7 @@ h1 {
 #authDisplayName,
 #authEmail,
 #authPassword,
-#profileDisplayName {
+#profileDisplayNameInput {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--control);
@@ -589,7 +723,8 @@ h1 {
 
 .section-divider {
   border-top: 1px solid var(--line);
-  margin-top: 0.15rem;
+  margin-top: 0.2rem;
+  margin-bottom: 0.36rem;
 }
 
 .summary {
@@ -646,7 +781,7 @@ h1 {
 }
 
 .stack + .stack {
-  margin-top: 0.35rem;
+  margin-top: 0.65rem;
 }
 
 .section-head {
@@ -685,6 +820,11 @@ h2 {
 .task-card:hover,
 .task-card:focus-within {
   border-color: var(--line-strong);
+}
+
+.task-card.due-today:not(.done) {
+  border-color: color-mix(in srgb, var(--line-strong) 72%, var(--brand) 28%);
+  background: color-mix(in srgb, var(--surface) 84%, var(--brand-soft) 16%);
 }
 
 .toggle {
@@ -788,24 +928,163 @@ h2 {
   line-height: 1.35;
 }
 
-.install-hint {
+.side-calendar {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  color: var(--ink-soft);
-  font-size: 0.84rem;
-  padding: 0.62rem 0.7rem;
+  padding: 0.62rem 0.68rem 0.66rem;
   display: grid;
+  gap: 0.58rem;
+}
+
+.side-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
 }
 
-.install-hint .linky {
-  width: auto;
-  min-height: 2.2rem;
+.side-calendar-month-wrap {
+  min-width: 0;
+}
+
+.side-calendar-month {
+  font-size: 0.86rem;
+  font-weight: 640;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.side-calendar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.side-calendar-nav {
+  width: 2rem;
+  height: 2rem;
+  min-width: 2rem;
+  font-size: 1rem;
+}
+
+.side-calendar-toggle {
+  min-height: 2rem;
+  padding: 0.32rem 0.6rem;
   border-radius: 999px;
-  justify-self: flex-start;
-  padding: 0.24rem 0.72rem;
-  font-size: 0.78rem;
+  font-size: 0.76rem;
+}
+
+.side-calendar-body {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.side-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.16rem;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.side-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.16rem;
+}
+
+.side-calendar-day {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  min-height: 2.35rem;
+  padding: 0.18rem 0.2rem;
+  font: inherit;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 0.18rem;
+  cursor: pointer;
+}
+
+.side-calendar-day:hover,
+.side-calendar-day:focus-visible {
+  border-color: var(--line);
+  background: var(--control);
+}
+
+.side-calendar-day.is-outside {
+  opacity: 0.52;
+}
+
+.side-calendar-day.is-today {
+  border-color: color-mix(in srgb, var(--line-strong) 70%, var(--brand) 30%);
+  color: var(--ink);
+}
+
+.side-calendar-day.has-tasks {
+  color: var(--ink);
+}
+
+.side-calendar-day-number {
+  font-size: 0.74rem;
+  font-weight: 620;
+  line-height: 1.1;
+}
+
+.side-calendar-dots {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.13rem;
+  min-height: 0.28rem;
+}
+
+.side-calendar-dot {
+  width: 0.21rem;
+  height: 0.21rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 75%, var(--ink-soft) 25%);
+}
+
+.side-calendar-dot-more {
+  font-size: 0.62rem;
+  color: var(--ink-faint);
+  letter-spacing: 0.01em;
+}
+
+.side-calendar-details {
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent 28%);
+  padding-top: 0.46rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.side-calendar-details-title {
+  font-size: 0.76rem;
+  color: var(--ink);
+  font-weight: 620;
+}
+
+.side-calendar-details-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.side-calendar-details-item {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  line-height: 1.25;
+}
+
+.side-calendar-details-item.is-done {
+  text-decoration: line-through;
+  opacity: 0.72;
 }
 
 .calendar-dialog {
@@ -1011,6 +1290,66 @@ input:focus-visible {
   }
 }
 
+@media (min-width: 820px) {
+  .tasks-content.has-side-content {
+    grid-template-columns: minmax(0, 1fr) 18rem;
+    align-items: start;
+    gap: 1.15rem;
+  }
+
+  .tasks-content.no-side-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tasks-content.no-side-content .tasks-main {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 1rem;
+  }
+
+  .tasks-content.no-side-content .tasks-main.prefer-horizontal-layout:not(.single-stack) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+    gap: 1rem 1.15rem;
+  }
+
+  .tasks-content.no-side-content .tasks-main.prefer-horizontal-layout:not(.single-stack) .stack {
+    min-height: 100%;
+  }
+
+  .tasks-content.no-side-content .tasks-main.single-stack {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tasks-content.no-side-content .tasks-main.prefer-horizontal-layout .section-divider {
+    grid-column: 1 / -1;
+  }
+
+  .tasks-content.no-side-content .tasks-main.prefer-horizontal-layout:not(.single-stack) .stack + .stack {
+    margin-top: 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  .tasks-content.has-side-content .tasks-main.prefer-horizontal-layout:not(.single-stack) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+    gap: 1rem 1.1rem;
+  }
+
+  .tasks-content.has-side-content .tasks-main.prefer-horizontal-layout:not(.single-stack) .stack {
+    min-height: 100%;
+  }
+
+  .tasks-content.has-side-content .tasks-main.prefer-horizontal-layout .section-divider {
+    grid-column: 1 / -1;
+  }
+
+  .tasks-content.has-side-content .tasks-main.prefer-horizontal-layout:not(.single-stack) .stack + .stack {
+    margin-top: 0;
+  }
+}
+
 @media (min-width: 980px) {
   .app-shell {
     width: min(64rem, calc(100% - 2rem));
@@ -1019,12 +1358,6 @@ input:focus-visible {
 
   .home-button {
     font-size: clamp(2.3rem, 3vw, 2.9rem);
-  }
-
-  .tasks-content {
-    grid-template-columns: minmax(0, 1fr) 18rem;
-    align-items: start;
-    gap: 1.15rem;
   }
 
   .tasks-side {
@@ -1098,9 +1431,22 @@ input:focus-visible {
     justify-content: stretch;
   }
 
+  .profile-edit-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .profile-edit-actions .profile-cancel {
+    width: 100%;
+    min-height: 2.75rem;
+    justify-content: center;
+    min-width: 0;
+  }
+
   .profile-actions .profile-save {
     width: 100%;
-    min-width: 10.5rem;
+    min-width: 0;
     min-height: 2.75rem;
     justify-content: center;
   }

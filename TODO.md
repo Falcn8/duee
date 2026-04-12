@@ -2,6 +2,8 @@
 
 ## P0) Must-Have Before Paid Launch
 
+- [ ] Wire web api to macOS app.
+
 ### Product Direction & Scope
 
 - [ ] Confirm primary launch market: Japanese university students.

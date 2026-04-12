@@ -4,7 +4,6 @@ const LEGACY_TASKS_CACHE_KEY = "duee:web:tasks-cache:v2";
 const LOCAL_TASKS_KEY = "duee:web:tasks:v1";
 const PREFS_KEY = "duee:web:prefs:v1";
 const AUTH_MODE_KEY = "duee:web:auth-mode:v1";
-const INSTALL_HINT_KEY = "duee:web:hide-install-hint";
 const CALENDAR_MIN_MONTH = -120;
 const CALENDAR_MAX_MONTH = 120;
 
@@ -16,12 +15,17 @@ const state = {
   currentView: "tasks",
   authRequestInFlight: false,
   profileRequestInFlight: false,
+  prefsSyncInFlight: false,
+  prefsSyncPending: false,
+  profileEditing: false,
   draftHasDueDate: true,
   editHasDueDate: true,
   editingTaskId: null,
   requestInFlight: false,
   pendingTaskMutationIds: new Set(),
   useLocalStorageMode: false,
+  sideCalendarMonth: startOfMonth(new Date()),
+  sideCalendarSelectedIso: null,
   calendarTarget: null,
   calendarMonth: startOfMonth(new Date()),
   calendarFocusedIso: null,
@@ -35,8 +39,8 @@ const refs = {
   dueDateToggle: document.getElementById("dueDateToggle"),
   taskInput: document.getElementById("taskInput"),
   addButton: document.getElementById("addButton"),
-  minimalToggle: document.getElementById("minimalToggle"),
-  settingsButton: document.getElementById("settingsButton"),
+  tasksContent: document.getElementById("tasksContent"),
+  tasksMain: document.getElementById("tasksMain"),
   statusPanel: document.getElementById("statusPanel"),
   statusLine: document.getElementById("statusLine"),
   statusActions: document.getElementById("statusActions"),
@@ -46,8 +50,13 @@ const refs = {
   doneList: document.getElementById("doneList"),
   emptyUpcoming: document.getElementById("emptyUpcoming"),
   emptyDone: document.getElementById("emptyDone"),
-  installHint: document.getElementById("installHint"),
-  closeInstallHint: document.getElementById("closeInstallHint"),
+  sideCalendarCard: document.getElementById("sideCalendarCard"),
+  sideCalendarMonthLabel: document.getElementById("sideCalendarMonthLabel"),
+  sideCalendarPrev: document.getElementById("sideCalendarPrev"),
+  sideCalendarNext: document.getElementById("sideCalendarNext"),
+  sideCalendarBody: document.getElementById("sideCalendarBody"),
+  sideCalendarGrid: document.getElementById("sideCalendarGrid"),
+  sideCalendarDetails: document.getElementById("sideCalendarDetails"),
   tasksShell: document.getElementById("tasksShell"),
   accountBar: document.getElementById("accountBar"),
   accountIdentity: document.getElementById("accountIdentity"),
@@ -67,11 +76,20 @@ const refs = {
   authStatus: document.getElementById("authStatus"),
   profilePage: document.getElementById("profilePage"),
   profileForm: document.getElementById("profileForm"),
-  profileDisplayName: document.getElementById("profileDisplayName"),
+  profileDisplayNameValue: document.getElementById("profileDisplayNameValue"),
+  profileDisplayNameInput: document.getElementById("profileDisplayNameInput"),
+  profileDisplayNameEditor: document.getElementById("profileDisplayNameEditor"),
+  profileEditButton: document.getElementById("profileEditButton"),
+  profileCancelEditButton: document.getElementById("profileCancelEditButton"),
   profileEmail: document.getElementById("profileEmail"),
   profileCreatedAt: document.getElementById("profileCreatedAt"),
   profileUserId: document.getElementById("profileUserId"),
   profileStatus: document.getElementById("profileStatus"),
+  profileHideDoneToggle: document.getElementById("profileHideDoneToggle"),
+  profileReceiveUpdatesToggle: document.getElementById("profileReceiveUpdatesToggle"),
+  profileConfirmDeleteToggle: document.getElementById("profileConfirmDeleteToggle"),
+  profileHorizontalSectionsToggle: document.getElementById("profileHorizontalSectionsToggle"),
+  profileSideCalendarToggle: document.getElementById("profileSideCalendarToggle"),
   profileBackButton: document.getElementById("profileBackButton"),
   profileSaveButton: document.getElementById("profileSaveButton"),
   calendarDialog: document.getElementById("calendarDialog"),
@@ -102,7 +120,8 @@ async function init() {
 
   refs.addButton.addEventListener("click", addTaskFromDraft);
   refs.taskInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
+    const isImeComposition = event.isComposing || event.keyCode === 229;
+    if (event.key === "Enter" && !isImeComposition) {
       event.preventDefault();
       addTaskFromDraft();
     }
@@ -137,24 +156,67 @@ async function init() {
     syncDueToggleUI();
   });
 
-  if (refs.minimalToggle) {
-    refs.minimalToggle.addEventListener("click", () => {
-      state.prefs.minimalMode = !state.prefs.minimalMode;
-      savePrefs();
-      render();
-    });
-  } else {
-    state.prefs.minimalMode = false;
-    savePrefs();
-  }
+  refs.profileHideDoneToggle?.addEventListener("change", () => {
+    state.prefs.minimalMode = Boolean(refs.profileHideDoneToggle.checked);
+    persistPrefs({ renderTasks: true });
+  });
 
-  refs.settingsButton?.addEventListener("click", () => {
-    refs.installHint.hidden = !refs.installHint.hidden;
-    if (refs.installHint.hidden) {
-      localStorage.setItem(INSTALL_HINT_KEY, "1");
-    } else {
-      localStorage.removeItem(INSTALL_HINT_KEY);
+  refs.profileReceiveUpdatesToggle?.addEventListener("change", () => {
+    state.prefs.receiveUpdates = Boolean(refs.profileReceiveUpdatesToggle.checked);
+    persistPrefs();
+  });
+
+  refs.profileConfirmDeleteToggle?.addEventListener("change", () => {
+    state.prefs.confirmDeletes = Boolean(refs.profileConfirmDeleteToggle.checked);
+    persistPrefs();
+  });
+
+  refs.profileHorizontalSectionsToggle?.addEventListener("change", () => {
+    state.prefs.horizontalTaskSections = Boolean(refs.profileHorizontalSectionsToggle.checked);
+    persistPrefs({ renderTasks: true });
+  });
+
+  refs.sideCalendarToggle?.addEventListener("click", () => {
+    state.prefs.sideCalendarVisible = !state.prefs.sideCalendarVisible;
+    persistPrefs();
+    syncSideCalendarUI();
+  });
+
+  refs.sideCalendarPrev?.addEventListener("click", () => {
+    state.sideCalendarMonth = addMonths(state.sideCalendarMonth, -1);
+    renderSideCalendar();
+  });
+
+  refs.sideCalendarNext?.addEventListener("click", () => {
+    state.sideCalendarMonth = addMonths(state.sideCalendarMonth, 1);
+    renderSideCalendar();
+  });
+
+  refs.sideCalendarGrid?.addEventListener("mouseover", (event) => {
+    const dayButton = event.target.closest("button[data-iso]");
+    if (!dayButton) {
+      return;
     }
+    showSideCalendarDetails(dayButton.dataset.iso);
+  });
+
+  refs.sideCalendarGrid?.addEventListener("focusin", (event) => {
+    const dayButton = event.target.closest("button[data-iso]");
+    if (!dayButton) {
+      return;
+    }
+    showSideCalendarDetails(dayButton.dataset.iso);
+  });
+
+  refs.sideCalendarGrid?.addEventListener("mouseleave", () => {
+    clearSideCalendarDetails();
+  });
+
+  refs.sideCalendarGrid?.addEventListener("focusout", (event) => {
+    if (refs.sideCalendarGrid.contains(event.relatedTarget)) {
+      return;
+    }
+    clearSideCalendarDetails();
   });
 
   refs.activeList.addEventListener("click", onTaskAction);
@@ -245,11 +307,6 @@ async function init() {
     }
   });
 
-  refs.closeInstallHint?.addEventListener("click", () => {
-    localStorage.setItem(INSTALL_HINT_KEY, "1");
-    refs.installHint.hidden = true;
-  });
-
   refs.statusRetry?.addEventListener("click", () => {
     retryTaskSync();
   });
@@ -286,6 +343,14 @@ async function init() {
     openTasksPage({ focusMainInput: true });
   });
 
+  refs.profileEditButton?.addEventListener("click", () => {
+    openProfileEditPanel();
+  });
+
+  refs.profileCancelEditButton?.addEventListener("click", () => {
+    closeProfileEditPanel();
+  });
+
   refs.profileForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     saveProfile();
@@ -302,7 +367,9 @@ async function init() {
   syncAuthModeUI();
   syncDueToggleUI();
   syncAddButtonUI();
-  maybeShowInstallHint();
+  syncProfilePreferencesUI();
+  syncSideCalendarUI();
+  syncTasksContentLayout();
 
   state.useLocalStorageMode = await resolveStorageMode();
   syncAuthUI();
@@ -327,6 +394,7 @@ async function bootstrapAuthenticatedSession() {
     }
 
     state.sessionUser = session.user;
+    await refreshPrefsFromServer();
     clearAuthStatus();
     syncAuthUI();
     await loadTasksForCurrentUser();
@@ -386,6 +454,7 @@ async function submitAuth() {
     }
 
     state.sessionUser = payload.user;
+    await refreshPrefsFromServer();
     state.currentView = "tasks";
     state.authMode = "login";
     saveAuthMode();
@@ -427,6 +496,9 @@ async function logoutCurrentUser() {
 function requireSignIn(message = "", type = "info") {
   state.sessionUser = null;
   state.currentView = "tasks";
+  state.profileEditing = false;
+  state.prefsSyncInFlight = false;
+  state.prefsSyncPending = false;
   state.tasks = [];
   state.pendingTaskMutationIds.clear();
   state.editingTaskId = null;
@@ -677,7 +749,8 @@ async function removeTask(id) {
       return;
     }
 
-    const confirmed = window.confirm(`Delete "${task.text}"?`);
+    const requiresConfirmation = Boolean(state.prefs.confirmDeletes);
+    const confirmed = !requiresConfirmation || window.confirm(`Delete "${task.text}"?`);
     if (!confirmed) {
       return;
     }
@@ -702,7 +775,8 @@ async function removeTask(id) {
     return;
   }
 
-  const confirmed = window.confirm(`Delete "${task.text}"?`);
+  const requiresConfirmation = Boolean(state.prefs.confirmDeletes);
+  const confirmed = !requiresConfirmation || window.confirm(`Delete "${task.text}"?`);
   if (!confirmed) {
     return;
   }
@@ -881,16 +955,12 @@ function render() {
   refs.emptyDone.hidden = doneTasks.length > 0;
 
   const doneSection = refs.doneList.closest(".stack");
-  doneSection.hidden = refs.minimalToggle ? state.prefs.minimalMode : false;
-
-  if (refs.minimalToggle) {
-    refs.minimalToggle.classList.toggle("is-active", state.prefs.minimalMode);
-    refs.minimalToggle.setAttribute("aria-pressed", String(state.prefs.minimalMode));
-    refs.minimalToggle.setAttribute(
-      "aria-label",
-      state.prefs.minimalMode ? "Show done section" : "Hide done section"
-    );
+  doneSection.hidden = state.prefs.minimalMode;
+  if (refs.tasksMain) {
+    refs.tasksMain.classList.toggle("single-stack", doneSection.hidden);
+    refs.tasksMain.classList.toggle("prefer-horizontal-layout", Boolean(state.prefs.horizontalTaskSections));
   }
+  renderSideCalendar();
 
 }
 
@@ -908,6 +978,7 @@ function renderTask(task) {
   const due = dueLabel(task);
   meta.textContent = due.text;
   meta.classList.toggle("overdue", due.overdue);
+  card.classList.toggle("due-today", due.today && !task.isCompleted);
 
   toggle.setAttribute(
     "aria-label",
@@ -926,7 +997,7 @@ function renderTask(task) {
 
 function dueLabel(task) {
   if (!task.hasDueDate || !task.dueDate) {
-    return { text: "no due date", overdue: false };
+    return { text: "no due date", overdue: false, today: false };
   }
 
   const dueDate = fromIsoDay(task.dueDate);
@@ -936,22 +1007,22 @@ function dueLabel(task) {
   });
 
   if (task.isCompleted) {
-    return { text: `due ${dateText}`, overdue: false };
+    return { text: `due ${dateText}`, overdue: false, today: false };
   }
 
   const delta = dayDelta(task.dueDate);
   if (delta === 0) {
-    return { text: `due ${dateText} · today`, overdue: false };
+    return { text: `due ${dateText} · today`, overdue: false, today: true };
   }
 
   if (delta > 0) {
     const dayWord = delta === 1 ? "day" : "days";
-    return { text: `due ${dateText} · in ${delta} ${dayWord}`, overdue: false };
+    return { text: `due ${dateText} · in ${delta} ${dayWord}`, overdue: false, today: false };
   }
 
   const late = Math.abs(delta);
   const dayWord = late === 1 ? "day" : "days";
-  return { text: `due ${dateText} · ${late} ${dayWord} late`, overdue: true };
+  return { text: `due ${dateText} · ${late} ${dayWord} late`, overdue: true, today: false };
 }
 
 function compareByDueDate(lhs, rhs) {
@@ -1025,7 +1096,11 @@ function syncAuthUI() {
   }
 
   populateProfileForm();
+  syncProfileEditUI();
+  syncProfilePreferencesUI();
+  syncSideCalendarUI();
   syncAccountControlsDisabled();
+  syncTasksContentLayout();
 }
 
 function openProfilePage() {
@@ -1033,10 +1108,34 @@ function openProfilePage() {
     return;
   }
   state.currentView = "profile";
+  state.profileEditing = false;
   clearProfileStatus();
   populateProfileForm();
+  syncProfileEditUI();
   syncAuthUI();
-  refs.profileDisplayName?.focus();
+  refs.profileEditButton?.focus();
+}
+
+function openProfileEditPanel() {
+  if (state.useLocalStorageMode || !state.sessionUser || state.authRequestInFlight || state.profileRequestInFlight) {
+    return;
+  }
+  state.profileEditing = true;
+  clearProfileStatus();
+  populateProfileForm();
+  syncProfileEditUI();
+  refs.profileDisplayNameInput?.focus();
+}
+
+function closeProfileEditPanel() {
+  if (state.profileRequestInFlight) {
+    return;
+  }
+  state.profileEditing = false;
+  clearProfileStatus();
+  populateProfileForm();
+  syncProfileEditUI();
+  refs.profileEditButton?.focus();
 }
 
 function openTasksPage({ focusAccount = false, focusMainInput = false } = {}) {
@@ -1054,13 +1153,20 @@ function openTasksPage({ focusAccount = false, focusMainInput = false } = {}) {
 }
 
 function populateProfileForm() {
-  if (!refs.profileDisplayName || !refs.profileEmail || !refs.profileCreatedAt || !refs.profileUserId) {
+  if (
+    !refs.profileDisplayNameValue
+    || !refs.profileDisplayNameInput
+    || !refs.profileEmail
+    || !refs.profileCreatedAt
+    || !refs.profileUserId
+  ) {
     return;
   }
 
   const user = state.sessionUser;
   if (!user) {
-    refs.profileDisplayName.value = "";
+    refs.profileDisplayNameValue.textContent = "";
+    refs.profileDisplayNameInput.value = "";
     refs.profileEmail.textContent = "";
     refs.profileCreatedAt.textContent = "";
     refs.profileUserId.textContent = "";
@@ -1068,12 +1174,52 @@ function populateProfileForm() {
   }
 
   const activeElement = document.activeElement;
-  if (activeElement !== refs.profileDisplayName || state.currentView !== "profile") {
-    refs.profileDisplayName.value = user.displayName;
+  if (activeElement !== refs.profileDisplayNameInput || !state.profileEditing) {
+    refs.profileDisplayNameInput.value = user.displayName;
   }
+  refs.profileDisplayNameValue.textContent = user.displayName;
   refs.profileEmail.textContent = user.email;
   refs.profileCreatedAt.textContent = formatAccountCreatedAt(user.createdAt);
   refs.profileUserId.textContent = user.id;
+}
+
+function syncProfileEditUI() {
+  const disabled = state.authRequestInFlight || state.profileRequestInFlight || !state.sessionUser;
+  const editing = state.profileEditing && Boolean(state.sessionUser);
+
+  if (refs.profileDisplayNameEditor) {
+    refs.profileDisplayNameEditor.hidden = !editing;
+  }
+  if (refs.profileEditButton) {
+    refs.profileEditButton.disabled = disabled;
+  }
+  if (refs.profileDisplayNameInput) {
+    refs.profileDisplayNameInput.disabled = disabled;
+  }
+  if (refs.profileCancelEditButton) {
+    refs.profileCancelEditButton.disabled = disabled;
+  }
+  if (refs.profileSaveButton) {
+    refs.profileSaveButton.disabled = disabled;
+  }
+}
+
+function syncProfilePreferencesUI() {
+  const disabled = state.authRequestInFlight || state.profileRequestInFlight;
+
+  syncPreferenceToggle(refs.profileHideDoneToggle, state.prefs.minimalMode, disabled);
+  syncPreferenceToggle(refs.profileReceiveUpdatesToggle, state.prefs.receiveUpdates, disabled);
+  syncPreferenceToggle(refs.profileConfirmDeleteToggle, state.prefs.confirmDeletes, disabled);
+  syncPreferenceToggle(refs.profileHorizontalSectionsToggle, state.prefs.horizontalTaskSections, disabled);
+}
+
+function syncPreferenceToggle(toggle, checked, disabled) {
+  if (!toggle) {
+    return;
+  }
+  toggle.checked = Boolean(checked);
+  toggle.disabled = disabled;
+  toggle.setAttribute("aria-checked", String(Boolean(checked)));
 }
 
 async function saveProfile() {
@@ -1086,16 +1232,16 @@ async function saveProfile() {
     return;
   }
 
-  const displayName = refs.profileDisplayName?.value.trim() || "";
+  const displayName = refs.profileDisplayNameInput?.value.trim() || "";
   if (!displayName) {
     setProfileStatus("Display name is required.", "error");
-    refs.profileDisplayName?.focus();
+    refs.profileDisplayNameInput?.focus();
     return;
   }
 
   if (displayName.length > 48) {
     setProfileStatus("Display name must be 48 characters or fewer.", "error");
-    refs.profileDisplayName?.focus();
+    refs.profileDisplayNameInput?.focus();
     return;
   }
 
@@ -1113,7 +1259,9 @@ async function saveProfile() {
       throw new Error("Profile response was invalid.");
     }
     state.sessionUser = payload.user;
+    state.profileEditing = false;
     populateProfileForm();
+    syncProfileEditUI();
     syncAuthUI();
     setProfileStatus("Profile updated.", "info");
   } catch (error) {
@@ -1176,20 +1324,18 @@ function setAuthRequestInFlight(value) {
     refs.authSwitchButton.disabled = value;
   }
   syncAccountControlsDisabled();
+  syncProfileEditUI();
+  syncProfilePreferencesUI();
 }
 
 function setProfileRequestInFlight(value) {
   state.profileRequestInFlight = value;
-  if (refs.profileDisplayName) {
-    refs.profileDisplayName.disabled = value;
-  }
   if (refs.profileBackButton) {
     refs.profileBackButton.disabled = value;
   }
-  if (refs.profileSaveButton) {
-    refs.profileSaveButton.disabled = value;
-  }
   syncAccountControlsDisabled();
+  syncProfileEditUI();
+  syncProfilePreferencesUI();
 }
 
 function syncAccountControlsDisabled() {
@@ -1276,9 +1422,6 @@ function syncAddButtonUI() {
 function setRequestInFlight(value) {
   state.requestInFlight = value;
   refs.taskInput.disabled = value;
-  if (refs.minimalToggle) {
-    refs.minimalToggle.disabled = value;
-  }
   refs.cancelEdit.disabled = value;
   syncAddButtonUI();
   syncDueToggleUI();
@@ -1287,8 +1430,163 @@ function setRequestInFlight(value) {
   render();
 }
 
-function maybeShowInstallHint() {
-  refs.installHint.hidden = true;
+function syncSideCalendarUI() {
+  if (!refs.sideCalendarBody || !refs.sideCalendarToggle) {
+    return;
+  }
+
+  const visible = Boolean(state.prefs.sideCalendarVisible);
+  refs.sideCalendarBody.hidden = !visible;
+  refs.sideCalendarToggle.textContent = visible ? "Hide" : "Show";
+  refs.sideCalendarToggle.setAttribute("aria-pressed", String(visible));
+  if (refs.sideCalendarPrev) {
+    refs.sideCalendarPrev.disabled = !visible;
+  }
+  if (refs.sideCalendarNext) {
+    refs.sideCalendarNext.disabled = !visible;
+  }
+  if (visible) {
+    renderSideCalendar();
+  } else {
+    clearSideCalendarDetails();
+  }
+  syncTasksContentLayout();
+}
+
+function renderSideCalendar() {
+  if (!refs.sideCalendarGrid || !refs.sideCalendarMonthLabel || !refs.sideCalendarBody || refs.sideCalendarBody.hidden) {
+    return;
+  }
+
+  const monthStart = startOfMonth(state.sideCalendarMonth);
+  const viewMonth = monthStart.getMonth();
+  const todayIso = isoDay(startOfLocalDay(new Date()));
+  const gridStart = addDays(monthStart, -monthStart.getDay());
+
+  refs.sideCalendarMonthLabel.textContent = monthStart.toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < 42; index += 1) {
+    const day = addDays(gridStart, index);
+    const dayIso = isoDay(day);
+    const dueTasks = getDueTasksByDay(dayIso);
+    const dayButton = document.createElement("button");
+
+    dayButton.type = "button";
+    dayButton.className = "side-calendar-day";
+    dayButton.dataset.iso = dayIso;
+    dayButton.setAttribute("role", "gridcell");
+    dayButton.setAttribute(
+      "aria-label",
+      `${day.toLocaleDateString(undefined, { month: "short", day: "numeric", weekday: "short" })}${dueTasks.length > 0 ? `, ${dueTasks.length} tasks due` : ""}`
+    );
+
+    if (day.getMonth() !== viewMonth) {
+      dayButton.classList.add("is-outside");
+    }
+    if (dayIso === todayIso) {
+      dayButton.classList.add("is-today");
+    }
+    if (dueTasks.length > 0) {
+      dayButton.classList.add("has-tasks");
+    }
+
+    const dayNumber = document.createElement("span");
+    dayNumber.className = "side-calendar-day-number";
+    dayNumber.textContent = String(day.getDate());
+    dayButton.appendChild(dayNumber);
+
+    if (dueTasks.length > 0) {
+      const dotWrap = document.createElement("span");
+      dotWrap.className = "side-calendar-dots";
+      const dotCount = Math.min(dueTasks.length, 4);
+      for (let dotIndex = 0; dotIndex < dotCount; dotIndex += 1) {
+        const dot = document.createElement("span");
+        dot.className = "side-calendar-dot";
+        dotWrap.appendChild(dot);
+      }
+      if (dueTasks.length > 4) {
+        const more = document.createElement("span");
+        more.className = "side-calendar-dot-more";
+        more.textContent = `+${dueTasks.length - 4}`;
+        dotWrap.appendChild(more);
+      }
+      dayButton.appendChild(dotWrap);
+    }
+
+    fragment.appendChild(dayButton);
+  }
+
+  refs.sideCalendarGrid.replaceChildren(fragment);
+}
+
+function getDueTasksByDay(isoDate) {
+  return state.tasks
+    .filter((task) => task.hasDueDate && task.dueDate === isoDate)
+    .sort((lhs, rhs) => {
+      if (lhs.isCompleted !== rhs.isCompleted) {
+        return Number(lhs.isCompleted) - Number(rhs.isCompleted);
+      }
+      return compareByDueDate(lhs, rhs);
+    });
+}
+
+function showSideCalendarDetails(isoDate) {
+  if (!refs.sideCalendarDetails || !isoDate) {
+    return;
+  }
+
+  const dueTasks = getDueTasksByDay(isoDate);
+  if (dueTasks.length === 0) {
+    clearSideCalendarDetails();
+    return;
+  }
+
+  const heading = document.createElement("p");
+  heading.className = "side-calendar-details-title";
+  heading.textContent = `${fromIsoDay(isoDate).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    weekday: "short",
+  })} · ${dueTasks.length} due`;
+
+  const list = document.createElement("ul");
+  list.className = "side-calendar-details-list";
+  for (const task of dueTasks.slice(0, 8)) {
+    const item = document.createElement("li");
+    item.className = "side-calendar-details-item";
+    if (task.isCompleted) {
+      item.classList.add("is-done");
+    }
+    item.textContent = task.text;
+    list.appendChild(item);
+  }
+
+  refs.sideCalendarDetails.replaceChildren(heading, list);
+  refs.sideCalendarDetails.hidden = false;
+}
+
+function clearSideCalendarDetails() {
+  if (!refs.sideCalendarDetails) {
+    return;
+  }
+  refs.sideCalendarDetails.hidden = true;
+  refs.sideCalendarDetails.replaceChildren();
+}
+
+function syncTasksContentLayout() {
+  if (!refs.tasksContent) {
+    return;
+  }
+
+  const sideHasVisibleContent = Boolean(refs.statusPanel && !refs.statusPanel.hidden)
+    || Boolean(refs.sideCalendarCard && !refs.sideCalendarCard.hidden);
+
+  refs.tasksContent.classList.toggle("has-side-content", sideHasVisibleContent);
+  refs.tasksContent.classList.toggle("no-side-content", !sideHasVisibleContent);
 }
 
 async function retryTaskSync() {
@@ -1349,6 +1647,7 @@ function setStatus(message, type = "info", actions = {}) {
   refs.statusRetry.classList.toggle("is-primary", showRetry);
   refs.statusSignIn.classList.toggle("is-primary", showSignIn && !showRetry);
   refs.statusActions.hidden = !showRetry && !showSignIn;
+  syncTasksContentLayout();
 }
 
 function clearStatus() {
@@ -1772,24 +2071,121 @@ function normalizeUser(rawUser) {
   return { id, email, displayName, createdAt };
 }
 
+function defaultPrefs() {
+  return {
+    minimalMode: false,
+    receiveUpdates: true,
+    confirmDeletes: true,
+    horizontalTaskSections: true,
+    sideCalendarVisible: true,
+  };
+}
+
+function normalizePrefs(rawPrefs) {
+  const defaults = defaultPrefs();
+  if (!rawPrefs || typeof rawPrefs !== "object") {
+    return { ...defaults };
+  }
+
+  return {
+    minimalMode: rawPrefs.minimalMode === undefined
+      ? (rawPrefs.hideDone === undefined ? defaults.minimalMode : Boolean(rawPrefs.hideDone))
+      : Boolean(rawPrefs.minimalMode),
+    receiveUpdates: rawPrefs.receiveUpdates === undefined
+      ? defaults.receiveUpdates
+      : Boolean(rawPrefs.receiveUpdates),
+    confirmDeletes: rawPrefs.confirmDeletes === undefined
+      ? defaults.confirmDeletes
+      : Boolean(rawPrefs.confirmDeletes),
+    horizontalTaskSections: rawPrefs.horizontalTaskSections === undefined
+      ? defaults.horizontalTaskSections
+      : Boolean(rawPrefs.horizontalTaskSections),
+    sideCalendarVisible: rawPrefs.sideCalendarVisible === undefined
+      ? defaults.sideCalendarVisible
+      : Boolean(rawPrefs.sideCalendarVisible),
+  };
+}
+
 function loadPrefs() {
   const raw = localStorage.getItem(PREFS_KEY);
   if (!raw) {
-    return { minimalMode: false };
+    return defaultPrefs();
   }
 
   try {
-    const parsed = JSON.parse(raw);
-    return {
-      minimalMode: Boolean(parsed.minimalMode),
-    };
+    return normalizePrefs(JSON.parse(raw));
   } catch {
-    return { minimalMode: false };
+    return defaultPrefs();
   }
 }
 
 function savePrefs() {
   localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs));
+}
+
+function persistPrefs({ renderTasks = false } = {}) {
+  savePrefs();
+  syncProfilePreferencesUI();
+  syncSideCalendarUI();
+  if (renderTasks) {
+    render();
+  }
+  if (!state.useLocalStorageMode && state.sessionUser) {
+    syncPrefsToServer();
+  }
+}
+
+async function refreshPrefsFromServer() {
+  if (state.useLocalStorageMode || !state.sessionUser) {
+    return;
+  }
+
+  try {
+    const remotePrefs = await apiGetPrefs();
+    state.prefs = normalizePrefs(remotePrefs);
+    savePrefs();
+    syncProfilePreferencesUI();
+    syncSideCalendarUI();
+    render();
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    console.error("Failed to load preferences:", error);
+  }
+}
+
+async function syncPrefsToServer() {
+  if (state.useLocalStorageMode || !state.sessionUser) {
+    return;
+  }
+  if (state.prefsSyncInFlight) {
+    state.prefsSyncPending = true;
+    return;
+  }
+
+  state.prefsSyncInFlight = true;
+  try {
+    const savedPrefs = await apiUpdatePrefs(state.prefs);
+    state.prefs = normalizePrefs(savedPrefs);
+    savePrefs();
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    console.error("Failed to sync preferences:", error);
+  } finally {
+    state.prefsSyncInFlight = false;
+    syncProfilePreferencesUI();
+    syncSideCalendarUI();
+    render();
+    if (state.prefsSyncPending) {
+      state.prefsSyncPending = false;
+      syncPrefsToServer().catch((error) => {
+        console.error("Failed to sync queued preferences:", error);
+      });
+    }
+  }
 }
 
 function loadAuthMode() {
@@ -1860,6 +2256,25 @@ async function apiUpdateProfile(displayName) {
   return {
     user: normalizeUser(payload.user),
   };
+}
+
+async function apiGetPrefs() {
+  const payload = await apiRequest("/prefs");
+  return normalizePrefs(payload.prefs);
+}
+
+async function apiUpdatePrefs(prefs) {
+  const payload = await apiRequest("/prefs", {
+    method: "PATCH",
+    body: JSON.stringify({
+      hideDone: Boolean(prefs.minimalMode),
+      receiveUpdates: Boolean(prefs.receiveUpdates),
+      confirmDeletes: Boolean(prefs.confirmDeletes),
+      horizontalTaskSections: Boolean(prefs.horizontalTaskSections),
+      sideCalendarVisible: Boolean(prefs.sideCalendarVisible),
+    }),
+  });
+  return normalizePrefs(payload.prefs);
 }
 
 async function apiGetTasks() {
