@@ -38,7 +38,7 @@ const DEFAULT_USER_PREFERENCES = Object.freeze({
   hideDone: false,
   receiveUpdates: true,
   confirmDeletes: true,
-  horizontalTaskSections: true,
+  horizontalTaskSections: false,
   sideCalendarVisible: true,
 });
 
@@ -611,7 +611,7 @@ async function ensureSchema() {
       hide_done TINYINT(1) NOT NULL DEFAULT 0,
       receive_updates TINYINT(1) NOT NULL DEFAULT 1,
       confirm_deletes TINYINT(1) NOT NULL DEFAULT 1,
-      horizontal_task_sections TINYINT(1) NOT NULL DEFAULT 1,
+      horizontal_task_sections TINYINT(1) NOT NULL DEFAULT 0,
       side_calendar_visible TINYINT(1) NOT NULL DEFAULT 1,
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)

@@ -176,10 +176,9 @@ async function init() {
     persistPrefs({ renderTasks: true });
   });
 
-  refs.sideCalendarToggle?.addEventListener("click", () => {
-    state.prefs.sideCalendarVisible = !state.prefs.sideCalendarVisible;
+  refs.profileSideCalendarToggle?.addEventListener("change", () => {
+    state.prefs.sideCalendarVisible = Boolean(refs.profileSideCalendarToggle.checked);
     persistPrefs();
-    syncSideCalendarUI();
   });
 
   refs.sideCalendarPrev?.addEventListener("click", () => {
@@ -192,7 +191,29 @@ async function init() {
     renderSideCalendar();
   });
 
+  refs.sideCalendarGrid?.addEventListener("click", (event) => {
+    const dayButton = event.target.closest("button[data-iso]");
+    if (!dayButton) {
+      return;
+    }
+
+    const dayIso = dayButton.dataset.iso;
+    if (state.sideCalendarSelectedIso === dayIso) {
+      state.sideCalendarSelectedIso = null;
+      clearSideCalendarDetails();
+      renderSideCalendar();
+      return;
+    }
+
+    state.sideCalendarSelectedIso = dayIso;
+    showSideCalendarDetails(dayIso, { showEmpty: true });
+    renderSideCalendar();
+  });
+
   refs.sideCalendarGrid?.addEventListener("mouseover", (event) => {
+    if (state.sideCalendarSelectedIso) {
+      return;
+    }
     const dayButton = event.target.closest("button[data-iso]");
     if (!dayButton) {
       return;
@@ -201,6 +222,9 @@ async function init() {
   });
 
   refs.sideCalendarGrid?.addEventListener("focusin", (event) => {
+    if (state.sideCalendarSelectedIso) {
+      return;
+    }
     const dayButton = event.target.closest("button[data-iso]");
     if (!dayButton) {
       return;
@@ -209,11 +233,19 @@ async function init() {
   });
 
   refs.sideCalendarGrid?.addEventListener("mouseleave", () => {
+    if (state.sideCalendarSelectedIso) {
+      showSideCalendarDetails(state.sideCalendarSelectedIso, { showEmpty: true });
+      return;
+    }
     clearSideCalendarDetails();
   });
 
   refs.sideCalendarGrid?.addEventListener("focusout", (event) => {
     if (refs.sideCalendarGrid.contains(event.relatedTarget)) {
+      return;
+    }
+    if (state.sideCalendarSelectedIso) {
+      showSideCalendarDetails(state.sideCalendarSelectedIso, { showEmpty: true });
       return;
     }
     clearSideCalendarDetails();
@@ -499,6 +531,7 @@ function requireSignIn(message = "", type = "info") {
   state.profileEditing = false;
   state.prefsSyncInFlight = false;
   state.prefsSyncPending = false;
+  state.sideCalendarSelectedIso = null;
   state.tasks = [];
   state.pendingTaskMutationIds.clear();
   state.editingTaskId = null;
@@ -961,6 +994,9 @@ function render() {
     refs.tasksMain.classList.toggle("prefer-horizontal-layout", Boolean(state.prefs.horizontalTaskSections));
   }
   renderSideCalendar();
+  if (state.sideCalendarSelectedIso) {
+    showSideCalendarDetails(state.sideCalendarSelectedIso, { showEmpty: true });
+  }
 
 }
 
@@ -1190,6 +1226,9 @@ function syncProfileEditUI() {
   if (refs.profileDisplayNameEditor) {
     refs.profileDisplayNameEditor.hidden = !editing;
   }
+  if (refs.profileDisplayNameValue) {
+    refs.profileDisplayNameValue.hidden = editing;
+  }
   if (refs.profileEditButton) {
     refs.profileEditButton.disabled = disabled;
   }
@@ -1211,6 +1250,7 @@ function syncProfilePreferencesUI() {
   syncPreferenceToggle(refs.profileReceiveUpdatesToggle, state.prefs.receiveUpdates, disabled);
   syncPreferenceToggle(refs.profileConfirmDeleteToggle, state.prefs.confirmDeletes, disabled);
   syncPreferenceToggle(refs.profileHorizontalSectionsToggle, state.prefs.horizontalTaskSections, disabled);
+  syncPreferenceToggle(refs.profileSideCalendarToggle, state.prefs.sideCalendarVisible, disabled);
 }
 
 function syncPreferenceToggle(toggle, checked, disabled) {
@@ -1431,22 +1471,25 @@ function setRequestInFlight(value) {
 }
 
 function syncSideCalendarUI() {
-  if (!refs.sideCalendarBody || !refs.sideCalendarToggle) {
+  if (!refs.sideCalendarCard || !refs.sideCalendarBody) {
     return;
   }
 
   const visible = Boolean(state.prefs.sideCalendarVisible);
+  refs.sideCalendarCard.hidden = !visible;
   refs.sideCalendarBody.hidden = !visible;
-  refs.sideCalendarToggle.textContent = visible ? "Hide" : "Show";
-  refs.sideCalendarToggle.setAttribute("aria-pressed", String(visible));
   if (refs.sideCalendarPrev) {
     refs.sideCalendarPrev.disabled = !visible;
   }
   if (refs.sideCalendarNext) {
     refs.sideCalendarNext.disabled = !visible;
   }
+
   if (visible) {
     renderSideCalendar();
+    if (state.sideCalendarSelectedIso) {
+      showSideCalendarDetails(state.sideCalendarSelectedIso, { showEmpty: true });
+    }
   } else {
     clearSideCalendarDetails();
   }
@@ -1490,6 +1533,10 @@ function renderSideCalendar() {
     if (dayIso === todayIso) {
       dayButton.classList.add("is-today");
     }
+    if (state.sideCalendarSelectedIso && dayIso === state.sideCalendarSelectedIso) {
+      dayButton.classList.add("is-selected");
+    }
+    dayButton.setAttribute("aria-selected", String(dayIso === state.sideCalendarSelectedIso));
     if (dueTasks.length > 0) {
       dayButton.classList.add("has-tasks");
     }
@@ -1534,13 +1581,13 @@ function getDueTasksByDay(isoDate) {
     });
 }
 
-function showSideCalendarDetails(isoDate) {
+function showSideCalendarDetails(isoDate, options = {}) {
   if (!refs.sideCalendarDetails || !isoDate) {
     return;
   }
 
   const dueTasks = getDueTasksByDay(isoDate);
-  if (dueTasks.length === 0) {
+  if (dueTasks.length === 0 && !options.showEmpty) {
     clearSideCalendarDetails();
     return;
   }
@@ -1555,14 +1602,21 @@ function showSideCalendarDetails(isoDate) {
 
   const list = document.createElement("ul");
   list.className = "side-calendar-details-list";
-  for (const task of dueTasks.slice(0, 8)) {
+  if (dueTasks.length === 0) {
     const item = document.createElement("li");
     item.className = "side-calendar-details-item";
-    if (task.isCompleted) {
-      item.classList.add("is-done");
-    }
-    item.textContent = task.text;
+    item.textContent = "No tasks due.";
     list.appendChild(item);
+  } else {
+    for (const task of dueTasks.slice(0, 8)) {
+      const item = document.createElement("li");
+      item.className = "side-calendar-details-item";
+      if (task.isCompleted) {
+        item.classList.add("is-done");
+      }
+      item.textContent = task.text;
+      list.appendChild(item);
+    }
   }
 
   refs.sideCalendarDetails.replaceChildren(heading, list);
@@ -2076,7 +2130,7 @@ function defaultPrefs() {
     minimalMode: false,
     receiveUpdates: true,
     confirmDeletes: true,
-    horizontalTaskSections: true,
+    horizontalTaskSections: false,
     sideCalendarVisible: true,
   };
 }

@@ -444,6 +444,7 @@ h1 {
 #authEmail,
 #authPassword,
 #profileDisplayNameInput {
+  width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--control);
@@ -1023,6 +1024,11 @@ h2 {
 .side-calendar-day.is-today {
   border-color: color-mix(in srgb, var(--line-strong) 70%, var(--brand) 30%);
   color: var(--ink);
+}
+
+.side-calendar-day.is-selected {
+  border-color: color-mix(in srgb, var(--brand) 70%, var(--line-strong) 30%);
+  background: color-mix(in srgb, var(--brand-soft) 80%, var(--surface) 20%);
 }
 
 .side-calendar-day.has-tasks {
