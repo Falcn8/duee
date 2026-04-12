@@ -1,17 +1,13 @@
-import SwiftData
 import SwiftUI
 
 #if os(macOS)
 import AppKit
-#elseif os(iOS)
-import UIKit
-#endif
 
-struct DueeRootView: View {
-    @Environment(\.modelContext) private var modelContext
+struct DueeWebRootView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dueeColorTheme) private var colorTheme
-    @Query private var tasks: [DueeTask]
+
+    @StateObject private var store = DueeWebStore()
 
     @AppStorage("minimalMode") private var minimalMode = false
     @AppStorage(DueePreferenceKeys.unfocusedBackgroundAlpha) private var unfocusedBackgroundAlpha = 0.78
@@ -33,12 +29,6 @@ struct DueeRootView: View {
     @State private var collapseAnchorBottomY: CGFloat?
     @Namespace private var rowAnimation
 
-    init() {
-        let dueDateSort = SortDescriptor(\DueeTask.dueDate, order: .forward)
-        let createdSort = SortDescriptor(\DueeTask.createdAt, order: .forward)
-        _tasks = Query(sort: [dueDateSort, createdSort], animation: .snappy(duration: 0.24))
-    }
-
     private var effectiveCollapsed: Bool {
 #if os(macOS)
         return isCollapsed
@@ -52,27 +42,7 @@ struct DueeRootView: View {
             header
 
             if !effectiveCollapsed {
-                TaskComposerView(
-                    dueDate: $draftDueDate,
-                    hasDueDate: $draftHasDueDate,
-                    taskText: $draftText,
-                    onAdd: createTask
-                )
-
-                Divider()
-                    .opacity(0.35)
-
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 9) {
-                        activeSection
-
-                        if !minimalMode && !completedTasks.isEmpty {
-                            doneSection
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 2)
-                }
+                content
             }
         }
         .frame(
@@ -106,6 +76,9 @@ struct DueeRootView: View {
         .animation(.easeInOut(duration: 0.2), value: isCollapsed)
         .animation(.snappy(duration: 0.26, extraBounce: 0), value: activeTasks.map(\.id))
         .animation(.snappy(duration: 0.26, extraBounce: 0), value: completedTasks.map(\.id))
+        .task(id: apiBaseURL) {
+            await store.bootstrap(baseURL: apiBaseURL)
+        }
         .sheet(isPresented: $isShowingSettings) {
             DueeSettingsView(
                 minimalMode: $minimalMode,
@@ -117,7 +90,7 @@ struct DueeRootView: View {
             )
         }
         .sheet(item: $editingTask) { _ in
-            EditTaskSheetView(
+            DueeWebEditTaskSheetView(
                 taskText: $editingTaskText,
                 dueDate: $editingDueDate,
                 hasDueDate: $editingHasDueDate,
@@ -125,6 +98,53 @@ struct DueeRootView: View {
                 onCancel: { editingTask = nil }
             )
         }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !store.isSignedIn {
+            DueeWebAuthCard(store: store)
+
+            if !store.statusMessage.isEmpty {
+                DueeWebStatusBanner(message: store.statusMessage, kind: store.statusKind)
+            }
+        } else {
+            if !store.statusMessage.isEmpty {
+                DueeWebStatusBanner(message: store.statusMessage, kind: store.statusKind)
+            }
+
+            TaskComposerView(
+                dueDate: $draftDueDate,
+                hasDueDate: $draftHasDueDate,
+                taskText: $draftText,
+                onAdd: createTask
+            )
+            .opacity(store.isMutating ? 0.92 : 1)
+
+            Divider()
+                .opacity(0.35)
+
+            if store.isBootstrapping && activeTasks.isEmpty && completedTasks.isEmpty {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 9) {
+                        activeSection
+
+                        if !minimalMode && !completedTasks.isEmpty {
+                            doneSection
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    private var tasks: [DueeTask] {
+        store.tasks
     }
 
     private var activeTasks: [DueeTask] {
@@ -187,6 +207,10 @@ struct DueeRootView: View {
     }
 
     private var collapsedSummaryText: String {
+        if !store.isSignedIn {
+            return "sign in to sync"
+        }
+
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
 
@@ -244,6 +268,26 @@ struct DueeRootView: View {
 
                 Spacer(minLength: 8)
 
+                if store.isSignedIn {
+                    headerCircleButton(
+                        systemImage: "arrow.clockwise",
+                        accessibilityText: "Refresh tasks"
+                    ) {
+                        Task {
+                            await store.refreshTasks()
+                        }
+                    }
+
+                    headerCircleButton(
+                        systemImage: "rectangle.portrait.and.arrow.right",
+                        accessibilityText: "Sign out"
+                    ) {
+                        Task {
+                            await store.signOut()
+                        }
+                    }
+                }
+
                 headerCircleButton(
                     systemImage: "minus",
                     accessibilityText: "Minimize to title only",
@@ -259,27 +303,14 @@ struct DueeRootView: View {
             }
         }
 #else
-        HStack(alignment: .center, spacing: 8) {
-            Text("duee")
-                .font(.system(size: 24, weight: .semibold))
-                .tracking(0.1)
-
-            Spacer(minLength: 8)
-
-            headerCircleButton(
-                systemImage: "gearshape",
-                accessibilityText: "Open settings"
-            ) {
-                isShowingSettings = true
-            }
-        }
+        EmptyView()
 #endif
     }
 
     private var activeSection: some View {
         Group {
             if activeTasks.isEmpty {
-                EmptyStateCard(
+                DueeWebEmptyStateCard(
                     title: tasks.isEmpty ? "Nothing due yet" : "All clear",
                     subtitle: tasks.isEmpty
                         ? "Add your first task above."
@@ -338,28 +369,21 @@ struct DueeRootView: View {
         let cleaned = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
 
-        withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
-            let item = DueeTask(
-                dueDate: draftHasDueDate ? draftDueDate : nil,
-                text: cleaned
-            )
-            modelContext.insert(item)
-            draftText = ""
-        }
+        let dueDate = draftHasDueDate ? draftDueDate : nil
 
-        persist()
+        Task {
+            let created = await store.createTask(text: cleaned, dueDate: dueDate)
+            if created {
+                draftText = ""
+            }
+        }
     }
 
     private func toggleCompletion(for task: DueeTask) {
         clearInputFocus()
-        withAnimation(.snappy(duration: 0.25, extraBounce: 0)) {
-            if task.isCompleted {
-                task.markActive()
-            } else {
-                task.markCompleted()
-            }
+        Task {
+            await store.setTaskCompletion(taskID: task.id, isCompleted: !task.isCompleted)
         }
-        persist()
     }
 
     private func beginEditing(_ task: DueeTask) {
@@ -375,37 +399,24 @@ struct DueeRootView: View {
         let cleaned = editingTaskText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
 
-        editingTask.text = cleaned
-        editingTask.hasDueDate = editingHasDueDate
-        if editingHasDueDate {
-            editingTask.dueDate = Calendar.current.startOfDay(for: editingDueDate)
-        }
-
+        let dueDate = editingHasDueDate ? editingDueDate : nil
         self.editingTask = nil
-        persist()
+
+        Task {
+            await store.updateTask(taskID: editingTask.id, text: cleaned, dueDate: dueDate)
+        }
     }
 
     private func deleteTask(_ task: DueeTask) {
         clearInputFocus()
-        withAnimation(.snappy(duration: 0.18, extraBounce: 0)) {
-            modelContext.delete(task)
-        }
-        persist()
-    }
-
-    private func persist() {
-        do {
-            try modelContext.save()
-        } catch {
-            assertionFailure("Failed to save Duee tasks: \(error.localizedDescription)")
+        Task {
+            await store.deleteTask(taskID: task.id)
         }
     }
 
     private func clearInputFocus() {
 #if os(macOS)
         NSApp.keyWindow?.makeFirstResponder(nil)
-#elseif os(iOS)
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 #endif
     }
 
@@ -504,10 +515,118 @@ struct DueeRootView: View {
 #endif
 }
 
-private struct EmptyStateCard: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dueeColorTheme) private var colorTheme
+private struct DueeWebAuthCard: View {
+    @ObservedObject var store: DueeWebStore
 
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(store.authMode == .signIn ? "Sign in" : "Create account")
+                .font(.system(size: 16, weight: .semibold))
+
+            Text(store.authMode == .signIn
+                 ? "Connect this macOS app to your duee web account."
+                 : "Create a duee web account to sync tasks.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Mode", selection: $store.authMode) {
+                ForEach(DueeWebAuthMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(store.isMutating)
+
+            if store.authMode == .register {
+                TextField("Display name", text: $store.authDisplayName)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(store.isMutating)
+            }
+
+            TextField("Email", text: $store.authEmail)
+                .textFieldStyle(.roundedBorder)
+                .disabled(store.isMutating)
+
+            SecureField("Password", text: $store.authPassword)
+                .textFieldStyle(.roundedBorder)
+                .disabled(store.isMutating)
+
+            Button {
+                Task {
+                    await store.submitAuth()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if store.isMutating {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(store.authMode == .signIn ? "Sign in" : "Create account")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!store.canSubmitAuth || store.isMutating)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.secondary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.secondary.opacity(0.18), lineWidth: 0.5)
+        )
+    }
+}
+
+private struct DueeWebStatusBanner: View {
+    let message: String
+    let kind: DueeWebStatusKind
+
+    var body: some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(foregroundColor)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(backgroundColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(foregroundColor.opacity(0.26), lineWidth: 0.5)
+            )
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .info:
+            return .secondary
+        case .warning:
+            return .orange
+        case .error:
+            return .red
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch kind {
+        case .info:
+            return .secondary.opacity(0.08)
+        case .warning:
+            return .orange.opacity(0.12)
+        case .error:
+            return .red.opacity(0.12)
+        }
+    }
+}
+
+private struct DueeWebEmptyStateCard: View {
     let title: String
     let subtitle: String
 
@@ -526,33 +645,16 @@ private struct EmptyStateCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(cardFill)
+                .fill(.secondary.opacity(0.08))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(cardStroke, lineWidth: 0.5)
+                .stroke(.secondary.opacity(0.18), lineWidth: 0.5)
         )
-    }
-
-    private var cardFill: Color {
-        if colorTheme.isCurrent {
-            return colorScheme == .dark ? .white.opacity(0.14) : .black.opacity(0.06)
-        }
-        return colorTheme.surfaceTone(for: colorScheme).opacity(colorScheme == .dark ? 0.28 : 0.2)
-    }
-
-    private var cardStroke: Color {
-        if colorTheme.isCurrent {
-            return colorScheme == .dark ? .white.opacity(0.2) : .black.opacity(0.14)
-        }
-        return colorTheme.neutralTone(for: colorScheme).opacity(colorScheme == .dark ? 0.22 : 0.15)
     }
 }
 
-private struct EditTaskSheetView: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dueeColorTheme) private var colorTheme
-
+private struct DueeWebEditTaskSheetView: View {
     @Binding var taskText: String
     @Binding var dueDate: Date
     @Binding var hasDueDate: Bool
@@ -577,14 +679,9 @@ private struct EditTaskSheetView: View {
                 .controlSize(.small)
 
             if hasDueDate {
-#if os(macOS)
                 DatePicker("Due date", selection: $dueDate, displayedComponents: [.date])
                     .datePickerStyle(.field)
                     .controlSize(.small)
-#else
-                DatePicker("Due date", selection: $dueDate, displayedComponents: [.date])
-                    .datePickerStyle(.compact)
-#endif
             }
 
             HStack {
@@ -599,19 +696,11 @@ private struct EditTaskSheetView: View {
         }
         .padding(18)
         .frame(width: 320)
-        .tint(sheetAccent)
-    }
-
-    private var sheetAccent: Color {
-        if colorTheme.isCurrent {
-            return colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.86)
-        }
-        return colorTheme.accentTone(for: colorScheme).opacity(0.96)
     }
 }
 
-#Preview("Duee") {
-    DueeRootView()
-        .modelContainer(PreviewSeed.container)
+#Preview("duee web mac") {
+    DueeWebRootView()
         .frame(width: 390, height: 470)
 }
+#endif

@@ -2,7 +2,7 @@
 
 ## P0) Must-Have Before Paid Launch
 
-- [ ] Wire web api to macOS app.
+- [x] Wire web api to macOS app.
 
 ### Product Direction & Scope
 
@@ -38,28 +38,28 @@
 
 ### User Data Rights & Account Lifecycle
 
-- [ ] Implement Delete Account flow (self-serve, in-app).
+- [x] Implement Delete Account flow (self-serve, in-app).
 - [ ] On delete account:
-  - [ ] delete user profile
-  - [ ] delete tasks
-  - [ ] delete sessions
-  - [ ] delete any related records
-- [ ] Implement Export Account Data (JSON).
-- [ ] Add endpoint/UI to download export package.
+  - [x] delete user profile
+  - [x] delete tasks
+  - [x] delete sessions
+  - [x] delete any related records
+- [x] Implement Export Account Data (JSON).
+- [x] Add endpoint/UI to download export package.
 - [ ] Add data retention rules and document them in Privacy Policy.
-- [ ] Add "Delete my data" and "Export my data" entries in settings.
+- [x] Add "Delete my data" and "Export my data" entries in settings.
 
 ### Auth, Security, and Abuse Protection
 
-- [ ] Email verification flow.
-- [ ] Password reset flow.
-- [ ] Add rate limiting for auth + task mutation endpoints.
-- [ ] Add brute-force protection for login/register.
-- [ ] Add secure headers (`helmet` or equivalent).
+- [x] Email verification flow.
+- [x] Password reset flow.
+- [x] Add rate limiting for auth + task mutation endpoints.
+- [x] Add brute-force protection for login/register.
+- [x] Add secure headers (`helmet` or equivalent).
 - [ ] Confirm cookie settings for production HTTPS (`Secure`, `HttpOnly`, `SameSite`).
-- [ ] Add CSRF mitigation strategy for cookie-based auth.
-- [ ] Add server-side input validation hardening across all endpoints.
-- [ ] Add audit log entries for sensitive account actions (delete/export/password reset).
+- [x] Add CSRF mitigation strategy for cookie-based auth.
+- [x] Add server-side input validation hardening across all endpoints.
+- [x] Add audit log entries for sensitive account actions (delete/export/password reset).
 
 ### Billing & Subscription Product
 

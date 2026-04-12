@@ -18,7 +18,7 @@ struct DueeApp: App {
     var body: some Scene {
 #if os(macOS)
         Window("duee", id: "main") {
-            DueeRootView()
+            DueeWebRootView()
                 .frame(minWidth: 360, minHeight: 48)
                 .preferredColorScheme(effectiveAppearanceMode.colorScheme)
                 .environment(\.dueeColorTheme, colorTheme)

@@ -6,6 +6,10 @@ const PREFS_KEY = "duee:web:prefs:v1";
 const AUTH_MODE_KEY = "duee:web:auth-mode:v1";
 const CALENDAR_MIN_MONTH = -120;
 const CALENDAR_MAX_MONTH = 120;
+const DELETE_ACCOUNT_CONFIRMATION_TOKEN = "DELETE";
+const AUTO_SYNC_INTERVAL_MS = 60 * 1000;
+const AUTO_SYNC_MIN_GAP_MS = 10 * 1000;
+const AUTH_ACTION_TOKEN_REGEX = /^[A-Za-z0-9_-]{32,256}$/;
 
 const state = {
   tasks: [],
@@ -30,6 +34,14 @@ const state = {
   calendarMonth: startOfMonth(new Date()),
   calendarFocusedIso: null,
   calendarReturnFocusEl: null,
+  activeToastSource: null,
+  toastDismissTimeoutId: null,
+  pendingTaskDeleteResolver: null,
+  pendingDeleteAccountResolver: null,
+  pendingResetPasswordToken: "",
+  autoSyncTimerId: null,
+  autoSyncInFlight: false,
+  lastAutoSyncAt: 0,
 };
 
 const refs = {
@@ -71,6 +83,8 @@ const refs = {
   authEmail: document.getElementById("authEmail"),
   authPassword: document.getElementById("authPassword"),
   authSubmit: document.getElementById("authSubmit"),
+  authForgotRow: document.getElementById("authForgotRow"),
+  authForgotPasswordButton: document.getElementById("authForgotPasswordButton"),
   authSwitchPrefix: document.getElementById("authSwitchPrefix"),
   authSwitchButton: document.getElementById("authSwitchButton"),
   authStatus: document.getElementById("authStatus"),
@@ -82,6 +96,8 @@ const refs = {
   profileEditButton: document.getElementById("profileEditButton"),
   profileCancelEditButton: document.getElementById("profileCancelEditButton"),
   profileEmail: document.getElementById("profileEmail"),
+  profileEmailVerification: document.getElementById("profileEmailVerification"),
+  profileResendVerificationButton: document.getElementById("profileResendVerificationButton"),
   profileCreatedAt: document.getElementById("profileCreatedAt"),
   profileUserId: document.getElementById("profileUserId"),
   profileStatus: document.getElementById("profileStatus"),
@@ -90,6 +106,8 @@ const refs = {
   profileConfirmDeleteToggle: document.getElementById("profileConfirmDeleteToggle"),
   profileHorizontalSectionsToggle: document.getElementById("profileHorizontalSectionsToggle"),
   profileSideCalendarToggle: document.getElementById("profileSideCalendarToggle"),
+  profileExportDataButton: document.getElementById("profileExportDataButton"),
+  profileDeleteDataButton: document.getElementById("profileDeleteDataButton"),
   profileBackButton: document.getElementById("profileBackButton"),
   profileSaveButton: document.getElementById("profileSaveButton"),
   calendarDialog: document.getElementById("calendarDialog"),
@@ -107,7 +125,32 @@ const refs = {
   editDueDateInput: document.getElementById("editDueDateInput"),
   editDueToggle: document.getElementById("editDueToggle"),
   cancelEdit: document.getElementById("cancelEdit"),
+  deleteTaskDialog: document.getElementById("deleteTaskDialog"),
+  deleteTaskPrompt: document.getElementById("deleteTaskPrompt"),
+  deleteTaskCancel: document.getElementById("deleteTaskCancel"),
+  deleteTaskConfirm: document.getElementById("deleteTaskConfirm"),
+  deleteAccountDialog: document.getElementById("deleteAccountDialog"),
+  deleteAccountForm: document.getElementById("deleteAccountForm"),
+  deleteAccountConfirmInput: document.getElementById("deleteAccountConfirmInput"),
+  deleteAccountPasswordInput: document.getElementById("deleteAccountPasswordInput"),
+  deleteAccountDialogStatus: document.getElementById("deleteAccountDialogStatus"),
+  deleteAccountCancel: document.getElementById("deleteAccountCancel"),
+  deleteAccountConfirm: document.getElementById("deleteAccountConfirm"),
+  forgotPasswordDialog: document.getElementById("forgotPasswordDialog"),
+  forgotPasswordForm: document.getElementById("forgotPasswordForm"),
+  forgotPasswordEmailInput: document.getElementById("forgotPasswordEmailInput"),
+  forgotPasswordDialogStatus: document.getElementById("forgotPasswordDialogStatus"),
+  forgotPasswordCancel: document.getElementById("forgotPasswordCancel"),
+  forgotPasswordSubmit: document.getElementById("forgotPasswordSubmit"),
+  resetPasswordDialog: document.getElementById("resetPasswordDialog"),
+  resetPasswordForm: document.getElementById("resetPasswordForm"),
+  resetPasswordInput: document.getElementById("resetPasswordInput"),
+  resetPasswordConfirmInput: document.getElementById("resetPasswordConfirmInput"),
+  resetPasswordDialogStatus: document.getElementById("resetPasswordDialogStatus"),
+  resetPasswordCancel: document.getElementById("resetPasswordCancel"),
+  resetPasswordSubmit: document.getElementById("resetPasswordSubmit"),
   taskTemplate: document.getElementById("taskTemplate"),
+  toastRegion: document.getElementById("toastRegion"),
 };
 
 init().catch((error) => {
@@ -289,6 +332,42 @@ async function init() {
     saveEdit();
   });
 
+  refs.editDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeEditDialog();
+  });
+
+  refs.editDialog?.addEventListener("close", () => {
+    state.editingTaskId = null;
+  });
+
+  refs.deleteTaskCancel?.addEventListener("click", () => {
+    resolveTaskDeletePrompt(false);
+  });
+
+  refs.deleteTaskConfirm?.addEventListener("click", () => {
+    resolveTaskDeletePrompt(true);
+  });
+
+  refs.deleteTaskDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    resolveTaskDeletePrompt(false);
+  });
+
+  refs.deleteAccountCancel?.addEventListener("click", () => {
+    resolveDeleteAccountPrompt(null);
+  });
+
+  refs.deleteAccountDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    resolveDeleteAccountPrompt(null);
+  });
+
+  refs.deleteAccountForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitDeleteAccountDialog();
+  });
+
   refs.calendarPrev.addEventListener("click", () => {
     shiftCalendarMonth(-1);
   });
@@ -339,6 +418,24 @@ async function init() {
     }
   });
 
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      triggerAutoSync("visibility");
+    }
+  });
+
+  window.addEventListener("focus", () => {
+    triggerAutoSync("focus");
+  });
+
+  window.addEventListener("online", () => {
+    triggerAutoSync("online");
+  });
+
+  window.addEventListener("beforeunload", () => {
+    stopAutoSyncLoop();
+  });
+
   refs.statusRetry?.addEventListener("click", () => {
     retryTaskSync();
   });
@@ -357,6 +454,10 @@ async function init() {
   refs.authForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     submitAuth();
+  });
+
+  refs.authForgotPasswordButton?.addEventListener("click", () => {
+    openForgotPasswordDialog();
   });
 
   refs.homeButton?.addEventListener("click", () => {
@@ -388,6 +489,46 @@ async function init() {
     saveProfile();
   });
 
+  refs.profileExportDataButton?.addEventListener("click", () => {
+    exportAccountData();
+  });
+
+  refs.profileDeleteDataButton?.addEventListener("click", () => {
+    deleteAccountData();
+  });
+
+  refs.profileResendVerificationButton?.addEventListener("click", () => {
+    resendEmailVerification();
+  });
+
+  refs.forgotPasswordCancel?.addEventListener("click", () => {
+    closeDialogElement(refs.forgotPasswordDialog);
+  });
+
+  refs.forgotPasswordDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeDialogElement(refs.forgotPasswordDialog);
+  });
+
+  refs.forgotPasswordForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitForgotPasswordDialog();
+  });
+
+  refs.resetPasswordCancel?.addEventListener("click", () => {
+    closeResetPasswordDialog();
+  });
+
+  refs.resetPasswordDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeResetPasswordDialog();
+  });
+
+  refs.resetPasswordForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitResetPasswordDialog();
+  });
+
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("./sw.js").catch(() => {
@@ -403,18 +544,24 @@ async function init() {
   syncSideCalendarUI();
   syncTasksContentLayout();
 
+  const authActions = consumeAuthActionQueryParams();
   state.useLocalStorageMode = await resolveStorageMode();
   syncAuthUI();
 
   if (state.useLocalStorageMode) {
+    stopAutoSyncLoop();
     state.tasks = loadLocalModeTasks();
     saveLocalModeTasks();
     setStatus("Debug mode enabled. Tasks are stored only on this device.", "warn");
+    if (authActions.verifyEmailToken || authActions.resetPasswordToken) {
+      setAuthStatus("Auth action links are unavailable in local debug mode.", "warn");
+    }
     render();
     return;
   }
 
   await bootstrapAuthenticatedSession();
+  await handleAuthActionParams(authActions);
 }
 
 async function bootstrapAuthenticatedSession() {
@@ -426,12 +573,79 @@ async function bootstrapAuthenticatedSession() {
     }
 
     state.sessionUser = session.user;
+    ensureAutoSyncLoop();
     await refreshPrefsFromServer();
     clearAuthStatus();
     syncAuthUI();
     await loadTasksForCurrentUser();
   } catch (error) {
     requireSignIn(error.message || "Could not verify your session.", "error");
+  }
+}
+
+function consumeAuthActionQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  const verifyEmailToken = sanitizeAuthActionToken(params.get("verify_email_token"));
+  const resetPasswordToken = sanitizeAuthActionToken(params.get("reset_password_token"));
+
+  if (!verifyEmailToken && !resetPasswordToken) {
+    return {
+      verifyEmailToken: "",
+      resetPasswordToken: "",
+    };
+  }
+
+  params.delete("verify_email_token");
+  params.delete("reset_password_token");
+  const nextQuery = params.toString();
+  const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
+  window.history.replaceState({}, "", nextUrl);
+
+  return {
+    verifyEmailToken,
+    resetPasswordToken,
+  };
+}
+
+async function handleAuthActionParams(actions) {
+  if (!actions) {
+    return;
+  }
+
+  if (actions.verifyEmailToken) {
+    await verifyEmailTokenFromLink(actions.verifyEmailToken);
+  }
+
+  if (actions.resetPasswordToken) {
+    openResetPasswordDialog(actions.resetPasswordToken);
+  }
+}
+
+async function verifyEmailTokenFromLink(token) {
+  if (!token || state.useLocalStorageMode) {
+    return;
+  }
+
+  setAuthRequestInFlight(true);
+  try {
+    const payload = await apiVerifyEmailToken(token);
+    if (payload.user) {
+      state.sessionUser = payload.user;
+      syncAuthUI();
+    }
+
+    const message = payload.alreadyVerified
+      ? "Email is already verified."
+      : "Email verified successfully.";
+    if (state.currentView === "profile" && state.sessionUser) {
+      setProfileStatus(message, "info");
+    } else {
+      setAuthStatus(message, "info");
+    }
+  } catch (error) {
+    setAuthStatus(error.message || "Could not verify your email link.", "error");
+  } finally {
+    setAuthRequestInFlight(false);
   }
 }
 
@@ -486,6 +700,7 @@ async function submitAuth() {
     }
 
     state.sessionUser = payload.user;
+    ensureAutoSyncLoop();
     await refreshPrefsFromServer();
     state.currentView = "tasks";
     state.authMode = "login";
@@ -499,6 +714,12 @@ async function submitAuth() {
     syncAuthUI();
     clearStatus();
     clearAuthStatus();
+
+    if (registerMode && payload.user && !payload.user.emailVerified) {
+      setStatus("Account created. Check your email to verify your address.", "info");
+    } else if (!registerMode && payload.user && !payload.user.emailVerified) {
+      setStatus("Your email is not verified yet. You can resend verification from Profile.", "warn");
+    }
 
     await loadTasksForCurrentUser();
   } catch (error) {
@@ -526,6 +747,7 @@ async function logoutCurrentUser() {
 }
 
 function requireSignIn(message = "", type = "info") {
+  stopAutoSyncLoop();
   state.sessionUser = null;
   state.currentView = "tasks";
   state.profileEditing = false;
@@ -548,17 +770,83 @@ function requireSignIn(message = "", type = "info") {
   }
 }
 
-async function refreshTasks() {
+function canRunAutoSyncNow() {
+  return (
+    !state.useLocalStorageMode
+    && Boolean(state.sessionUser)
+    && !state.requestInFlight
+    && !state.authRequestInFlight
+    && !state.profileRequestInFlight
+    && !state.prefsSyncInFlight
+    && state.pendingTaskMutationIds.size === 0
+  );
+}
+
+function ensureAutoSyncLoop() {
+  if (state.useLocalStorageMode || !state.sessionUser) {
+    stopAutoSyncLoop();
+    return;
+  }
+
+  if (state.autoSyncTimerId !== null) {
+    return;
+  }
+
+  state.autoSyncTimerId = window.setInterval(() => {
+    triggerAutoSync("interval");
+  }, AUTO_SYNC_INTERVAL_MS);
+}
+
+function stopAutoSyncLoop() {
+  if (state.autoSyncTimerId !== null) {
+    clearInterval(state.autoSyncTimerId);
+    state.autoSyncTimerId = null;
+  }
+  state.autoSyncInFlight = false;
+}
+
+async function triggerAutoSync(reason = "interval") {
+  if (document.hidden) {
+    return;
+  }
+
+  if (!canRunAutoSyncNow() || state.autoSyncInFlight) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - state.lastAutoSyncAt < AUTO_SYNC_MIN_GAP_MS) {
+    return;
+  }
+
+  state.autoSyncInFlight = true;
+  state.lastAutoSyncAt = now;
+
+  try {
+    await refreshTasks({ silent: true, reason });
+  } finally {
+    state.autoSyncInFlight = false;
+  }
+}
+
+async function refreshTasks(options = {}) {
+  const silent = Boolean(options.silent);
   if (state.useLocalStorageMode || !state.sessionUser) {
     return;
   }
 
+  if (silent && !canRunAutoSyncNow()) {
+    return;
+  }
+
   const cachedSnapshot = [...state.tasks];
-  setRequestInFlight(true);
+  if (!silent) {
+    setRequestInFlight(true);
+  }
   try {
     const remoteTasks = await apiGetTasks();
 
-    if (remoteTasks.length === 0 && cachedSnapshot.length > 0) {
+    if (!silent && remoteTasks.length === 0 && cachedSnapshot.length > 0) {
       const migratedTasks = await migrateCachedTasks(cachedSnapshot);
       state.tasks = migratedTasks;
       saveTasksCache();
@@ -569,21 +857,27 @@ async function refreshTasks() {
 
     state.tasks = remoteTasks;
     saveTasksCache();
-    clearStatus();
+    if (!silent) {
+      clearStatus();
+    }
     render();
   } catch (error) {
     if (handleUnauthorizedError(error)) {
       return;
     }
 
-    if (state.tasks.length > 0) {
-      setStatus("Showing cached tasks. Server is unreachable right now.", "warn", { retry: true });
-    } else {
-      setStatus(error.message || "Could not load tasks from server.", "error", { retry: true });
+    if (!silent) {
+      if (state.tasks.length > 0) {
+        setStatus("Showing cached tasks. Server is unreachable right now.", "warn", { retry: true });
+      } else {
+        setStatus(error.message || "Could not load tasks from server.", "error", { retry: true });
+      }
+      render();
     }
-    render();
   } finally {
-    setRequestInFlight(false);
+    if (!silent) {
+      setRequestInFlight(false);
+    }
   }
 }
 
@@ -782,8 +1076,7 @@ async function removeTask(id) {
       return;
     }
 
-    const requiresConfirmation = Boolean(state.prefs.confirmDeletes);
-    const confirmed = !requiresConfirmation || window.confirm(`Delete "${task.text}"?`);
+    const confirmed = await confirmTaskDeletion(task);
     if (!confirmed) {
       return;
     }
@@ -808,8 +1101,7 @@ async function removeTask(id) {
     return;
   }
 
-  const requiresConfirmation = Boolean(state.prefs.confirmDeletes);
-  const confirmed = !requiresConfirmation || window.confirm(`Delete "${task.text}"?`);
+  const confirmed = await confirmTaskDeletion(task);
   if (!confirmed) {
     return;
   }
@@ -857,26 +1149,288 @@ function openEditDialog(id) {
   refs.editDueDateInput.value = task.hasDueDate ? normalizedDraftDate(task.dueDate) : "";
   syncEditDueToggleUI();
 
-  if (typeof refs.editDialog.showModal === "function") {
-    refs.editDialog.showModal();
-  } else {
-    const nextText = window.prompt("Edit task", task.text);
-    if (nextText === null) {
-      return;
-    }
-    const trimmed = nextText.trim();
-    if (trimmed) {
-      refs.editTaskInput.value = trimmed;
-      saveEdit();
-    }
+  const opened = openDialogElement(refs.editDialog);
+  if (!opened) {
+    setStatus("Edit dialog is unavailable in this browser.", "error");
   }
 }
 
 function closeEditDialog() {
-  if (refs.editDialog.open) {
-    refs.editDialog.close();
-  }
+  closeDialogElement(refs.editDialog);
   state.editingTaskId = null;
+}
+
+async function confirmTaskDeletion(task) {
+  const requiresConfirmation = Boolean(state.prefs.confirmDeletes);
+  if (!requiresConfirmation) {
+    return true;
+  }
+
+  if (!refs.deleteTaskDialog || !refs.deleteTaskPrompt) {
+    return true;
+  }
+
+  if (state.pendingTaskDeleteResolver) {
+    state.pendingTaskDeleteResolver(false);
+    state.pendingTaskDeleteResolver = null;
+  }
+
+  refs.deleteTaskPrompt.textContent = `Delete "${task.text}"?`;
+  const opened = openDialogElement(refs.deleteTaskDialog);
+  if (!opened) {
+    return true;
+  }
+
+  return await new Promise((resolve) => {
+    state.pendingTaskDeleteResolver = resolve;
+  });
+}
+
+function resolveTaskDeletePrompt(confirmed) {
+  if (!state.pendingTaskDeleteResolver) {
+    return;
+  }
+
+  const resolve = state.pendingTaskDeleteResolver;
+  state.pendingTaskDeleteResolver = null;
+  closeDialogElement(refs.deleteTaskDialog);
+  resolve(Boolean(confirmed));
+}
+
+async function requestDeleteAccountCredentials() {
+  if (!refs.deleteAccountDialog || !refs.deleteAccountForm) {
+    return null;
+  }
+
+  if (state.pendingDeleteAccountResolver) {
+    state.pendingDeleteAccountResolver(null);
+    state.pendingDeleteAccountResolver = null;
+  }
+
+  if (refs.deleteAccountConfirmInput) {
+    refs.deleteAccountConfirmInput.value = "";
+  }
+  if (refs.deleteAccountPasswordInput) {
+    refs.deleteAccountPasswordInput.value = "";
+  }
+  setDeleteAccountDialogStatus("", "info");
+
+  const opened = openDialogElement(refs.deleteAccountDialog);
+  if (!opened) {
+    return null;
+  }
+
+  queueMicrotask(() => {
+    refs.deleteAccountConfirmInput?.focus();
+  });
+
+  return await new Promise((resolve) => {
+    state.pendingDeleteAccountResolver = resolve;
+  });
+}
+
+function submitDeleteAccountDialog() {
+  if (!refs.deleteAccountConfirmInput || !refs.deleteAccountPasswordInput) {
+    resolveDeleteAccountPrompt(null);
+    return;
+  }
+
+  const confirmText = refs.deleteAccountConfirmInput.value.trim().toUpperCase();
+  const password = refs.deleteAccountPasswordInput.value;
+
+  if (confirmText !== DELETE_ACCOUNT_CONFIRMATION_TOKEN) {
+    setDeleteAccountDialogStatus("Type DELETE exactly to confirm account deletion.", "warn");
+    refs.deleteAccountConfirmInput.focus();
+    return;
+  }
+
+  if (!password) {
+    setDeleteAccountDialogStatus("Password is required.", "warn");
+    refs.deleteAccountPasswordInput.focus();
+    return;
+  }
+
+  resolveDeleteAccountPrompt({ password });
+}
+
+function resolveDeleteAccountPrompt(payload) {
+  if (!state.pendingDeleteAccountResolver) {
+    return;
+  }
+
+  const resolve = state.pendingDeleteAccountResolver;
+  state.pendingDeleteAccountResolver = null;
+  closeDialogElement(refs.deleteAccountDialog);
+  resolve(payload);
+}
+
+function setDeleteAccountDialogStatus(message, type = "info") {
+  syncInlineStatus(refs.deleteAccountDialogStatus, message, type, { renderInline: true });
+}
+
+function openForgotPasswordDialog() {
+  if (state.useLocalStorageMode || state.authRequestInFlight) {
+    return;
+  }
+
+  if (!refs.forgotPasswordDialog || !refs.forgotPasswordForm || !refs.forgotPasswordEmailInput) {
+    return;
+  }
+
+  refs.forgotPasswordEmailInput.value = refs.authEmail?.value.trim() || "";
+  setForgotPasswordDialogStatus("", "info");
+
+  const opened = openDialogElement(refs.forgotPasswordDialog);
+  if (!opened) {
+    setAuthStatus("Password reset dialog is unavailable in this browser.", "error");
+    return;
+  }
+
+  queueMicrotask(() => {
+    refs.forgotPasswordEmailInput?.focus();
+  });
+}
+
+async function submitForgotPasswordDialog() {
+  if (!refs.forgotPasswordEmailInput) {
+    return;
+  }
+
+  const email = refs.forgotPasswordEmailInput.value.trim();
+  if (!email) {
+    setForgotPasswordDialogStatus("Email is required.", "warn");
+    refs.forgotPasswordEmailInput.focus();
+    return;
+  }
+
+  setAuthRequestInFlight(true);
+  setForgotPasswordDialogStatus("", "info");
+  try {
+    await apiRequestPasswordReset(email);
+    closeDialogElement(refs.forgotPasswordDialog);
+    setAuthStatus("If that account exists, a reset link has been sent.", "info");
+  } catch (error) {
+    setForgotPasswordDialogStatus(error.message || "Could not send reset email.", "error");
+  } finally {
+    setAuthRequestInFlight(false);
+  }
+}
+
+function setForgotPasswordDialogStatus(message, type = "info") {
+  syncInlineStatus(refs.forgotPasswordDialogStatus, message, type, { renderInline: true });
+}
+
+function openResetPasswordDialog(token) {
+  if (!token || !refs.resetPasswordDialog || !refs.resetPasswordForm) {
+    return;
+  }
+
+  state.pendingResetPasswordToken = token;
+  if (refs.resetPasswordInput) {
+    refs.resetPasswordInput.value = "";
+  }
+  if (refs.resetPasswordConfirmInput) {
+    refs.resetPasswordConfirmInput.value = "";
+  }
+  setResetPasswordDialogStatus("", "info");
+
+  const opened = openDialogElement(refs.resetPasswordDialog);
+  if (!opened) {
+    state.pendingResetPasswordToken = "";
+    setAuthStatus("Password reset dialog is unavailable in this browser.", "error");
+    return;
+  }
+
+  queueMicrotask(() => {
+    refs.resetPasswordInput?.focus();
+  });
+}
+
+function closeResetPasswordDialog() {
+  state.pendingResetPasswordToken = "";
+  closeDialogElement(refs.resetPasswordDialog);
+  setResetPasswordDialogStatus("", "info");
+}
+
+async function submitResetPasswordDialog() {
+  if (!state.pendingResetPasswordToken || !refs.resetPasswordInput || !refs.resetPasswordConfirmInput) {
+    closeResetPasswordDialog();
+    return;
+  }
+
+  const password = refs.resetPasswordInput.value;
+  const confirm = refs.resetPasswordConfirmInput.value;
+
+  if (!password) {
+    setResetPasswordDialogStatus("New password is required.", "warn");
+    refs.resetPasswordInput.focus();
+    return;
+  }
+
+  if (password.length < 8) {
+    setResetPasswordDialogStatus("Password must be at least 8 characters.", "warn");
+    refs.resetPasswordInput.focus();
+    return;
+  }
+
+  if (password !== confirm) {
+    setResetPasswordDialogStatus("Passwords do not match.", "warn");
+    refs.resetPasswordConfirmInput.focus();
+    return;
+  }
+
+  setAuthRequestInFlight(true);
+  setResetPasswordDialogStatus("", "info");
+  try {
+    await apiConfirmPasswordReset(state.pendingResetPasswordToken, password);
+    closeResetPasswordDialog();
+    state.authMode = "login";
+    saveAuthMode();
+    syncAuthModeUI();
+    requireSignIn("Password updated. Sign in with your new password.", "info");
+    refs.authEmail?.focus();
+  } catch (error) {
+    setResetPasswordDialogStatus(error.message || "Could not reset password.", "error");
+  } finally {
+    setAuthRequestInFlight(false);
+  }
+}
+
+function setResetPasswordDialogStatus(message, type = "info") {
+  syncInlineStatus(refs.resetPasswordDialogStatus, message, type, { renderInline: true });
+}
+
+function openDialogElement(dialog) {
+  if (!dialog) {
+    return false;
+  }
+
+  if (typeof dialog.showModal === "function") {
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+    return true;
+  }
+
+  dialog.setAttribute("open", "");
+  dialog.dataset.fallbackOpen = "true";
+  return true;
+}
+
+function closeDialogElement(dialog) {
+  if (!dialog) {
+    return;
+  }
+
+  if (typeof dialog.close === "function") {
+    if (dialog.open) {
+      dialog.close();
+    }
+    return;
+  }
+
+  dialog.removeAttribute("open");
+  delete dialog.dataset.fallbackOpen;
 }
 
 async function saveEdit() {
@@ -1206,6 +1760,7 @@ function populateProfileForm() {
     refs.profileEmail.textContent = "";
     refs.profileCreatedAt.textContent = "";
     refs.profileUserId.textContent = "";
+    syncProfileVerificationUI();
     return;
   }
 
@@ -1217,6 +1772,7 @@ function populateProfileForm() {
   refs.profileEmail.textContent = user.email;
   refs.profileCreatedAt.textContent = formatAccountCreatedAt(user.createdAt);
   refs.profileUserId.textContent = user.id;
+  syncProfileVerificationUI();
 }
 
 function syncProfileEditUI() {
@@ -1245,12 +1801,49 @@ function syncProfileEditUI() {
 
 function syncProfilePreferencesUI() {
   const disabled = state.authRequestInFlight || state.profileRequestInFlight;
+  const actionDisabled = disabled || !state.sessionUser || state.useLocalStorageMode;
 
   syncPreferenceToggle(refs.profileHideDoneToggle, state.prefs.minimalMode, disabled);
   syncPreferenceToggle(refs.profileReceiveUpdatesToggle, state.prefs.receiveUpdates, disabled);
   syncPreferenceToggle(refs.profileConfirmDeleteToggle, state.prefs.confirmDeletes, disabled);
   syncPreferenceToggle(refs.profileHorizontalSectionsToggle, state.prefs.horizontalTaskSections, disabled);
   syncPreferenceToggle(refs.profileSideCalendarToggle, state.prefs.sideCalendarVisible, disabled);
+
+  if (refs.profileExportDataButton) {
+    refs.profileExportDataButton.disabled = actionDisabled;
+  }
+  if (refs.profileDeleteDataButton) {
+    refs.profileDeleteDataButton.disabled = actionDisabled;
+  }
+
+  syncProfileVerificationUI();
+}
+
+function syncProfileVerificationUI() {
+  const user = state.sessionUser;
+
+  if (refs.profileEmailVerification) {
+    if (!user) {
+      refs.profileEmailVerification.textContent = "";
+      refs.profileEmailVerification.dataset.type = "info";
+    } else if (user.emailVerified) {
+      refs.profileEmailVerification.textContent = user.emailVerifiedAt
+        ? `Verified ${formatAccountCreatedAt(user.emailVerifiedAt)}`
+        : "Email verified.";
+      refs.profileEmailVerification.dataset.type = "info";
+    } else {
+      refs.profileEmailVerification.textContent = "Email not verified yet.";
+      refs.profileEmailVerification.dataset.type = "warn";
+    }
+  }
+
+  if (refs.profileResendVerificationButton) {
+    const hidden = !user || state.useLocalStorageMode || Boolean(user?.emailVerified);
+    refs.profileResendVerificationButton.hidden = hidden;
+    refs.profileResendVerificationButton.disabled = hidden
+      || state.authRequestInFlight
+      || state.profileRequestInFlight;
+  }
 }
 
 function syncPreferenceToggle(toggle, checked, disabled) {
@@ -1314,6 +1907,135 @@ async function saveProfile() {
   }
 }
 
+async function exportAccountData() {
+  if (
+    state.useLocalStorageMode
+    || !state.sessionUser
+    || state.authRequestInFlight
+    || state.profileRequestInFlight
+  ) {
+    return;
+  }
+
+  setProfileRequestInFlight(true);
+  clearProfileStatus();
+  try {
+    const response = await fetch(`${API_BASE}/auth/export/download`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      let message = `Request failed with status ${response.status}.`;
+      try {
+        const payload = await response.json();
+        if (payload?.error) {
+          message = payload.error;
+        }
+      } catch {
+        // keep fallback message
+      }
+
+      const error = new Error(message);
+      error.statusCode = response.status;
+      throw error;
+    }
+
+    const contentDisposition = response.headers.get("content-disposition") || "";
+    const matchedFilename = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
+    const filename = matchedFilename?.[1] || "duee-account-export.json";
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    link.style.display = "none";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+
+    setProfileStatus("Export downloaded.", "info");
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    setProfileStatus(error.message || "Could not export account data.", "error");
+  } finally {
+    setProfileRequestInFlight(false);
+  }
+}
+
+async function deleteAccountData() {
+  if (
+    state.useLocalStorageMode
+    || !state.sessionUser
+    || state.authRequestInFlight
+    || state.profileRequestInFlight
+  ) {
+    return;
+  }
+
+  const credentials = await requestDeleteAccountCredentials();
+  if (!credentials) {
+    return;
+  }
+
+  const { password } = credentials;
+
+  setProfileRequestInFlight(true);
+  clearProfileStatus();
+  try {
+    await apiDeleteAccount(password);
+    requireSignIn("Your account has been deleted.", "info");
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    setProfileStatus(error.message || "Could not delete account.", "error");
+  } finally {
+    setProfileRequestInFlight(false);
+  }
+}
+
+async function resendEmailVerification() {
+  if (
+    state.useLocalStorageMode
+    || !state.sessionUser
+    || state.sessionUser.emailVerified
+    || state.authRequestInFlight
+    || state.profileRequestInFlight
+  ) {
+    return;
+  }
+
+  setProfileRequestInFlight(true);
+  clearProfileStatus();
+  try {
+    const payload = await apiResendEmailVerification();
+    if (payload.alreadyVerified) {
+      if (state.sessionUser) {
+        state.sessionUser.emailVerified = true;
+        state.sessionUser.emailVerifiedAt = state.sessionUser.emailVerifiedAt || new Date().toISOString();
+      }
+      syncProfileVerificationUI();
+      setProfileStatus("Email is already verified.", "info");
+      return;
+    }
+    setProfileStatus("Verification email sent.", "info");
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    setProfileStatus(error.message || "Could not send verification email.", "error");
+  } finally {
+    setProfileRequestInFlight(false);
+  }
+}
+
 function syncAuthModeUI() {
   if (
     !refs.authTitle
@@ -1339,6 +2061,12 @@ function syncAuthModeUI() {
   refs.authDisplayNameField.hidden = !registerMode;
   refs.authDisplayName.required = registerMode;
   refs.authDisplayName.disabled = !registerMode;
+  if (refs.authForgotRow) {
+    refs.authForgotRow.hidden = registerMode;
+  }
+  if (refs.authForgotPasswordButton) {
+    refs.authForgotPasswordButton.disabled = state.authRequestInFlight || registerMode;
+  }
   if (!registerMode) {
     refs.authDisplayName.value = "";
   }
@@ -1363,6 +2091,30 @@ function setAuthRequestInFlight(value) {
   if (refs.authSwitchButton) {
     refs.authSwitchButton.disabled = value;
   }
+  if (refs.authForgotPasswordButton) {
+    refs.authForgotPasswordButton.disabled = value || state.authMode === "register";
+  }
+  if (refs.forgotPasswordEmailInput) {
+    refs.forgotPasswordEmailInput.disabled = value;
+  }
+  if (refs.forgotPasswordCancel) {
+    refs.forgotPasswordCancel.disabled = value;
+  }
+  if (refs.forgotPasswordSubmit) {
+    refs.forgotPasswordSubmit.disabled = value;
+  }
+  if (refs.resetPasswordInput) {
+    refs.resetPasswordInput.disabled = value;
+  }
+  if (refs.resetPasswordConfirmInput) {
+    refs.resetPasswordConfirmInput.disabled = value;
+  }
+  if (refs.resetPasswordCancel) {
+    refs.resetPasswordCancel.disabled = value;
+  }
+  if (refs.resetPasswordSubmit) {
+    refs.resetPasswordSubmit.disabled = value;
+  }
   syncAccountControlsDisabled();
   syncProfileEditUI();
   syncProfilePreferencesUI();
@@ -1372,6 +2124,18 @@ function setProfileRequestInFlight(value) {
   state.profileRequestInFlight = value;
   if (refs.profileBackButton) {
     refs.profileBackButton.disabled = value;
+  }
+  if (refs.deleteAccountConfirmInput) {
+    refs.deleteAccountConfirmInput.disabled = value;
+  }
+  if (refs.deleteAccountPasswordInput) {
+    refs.deleteAccountPasswordInput.disabled = value;
+  }
+  if (refs.deleteAccountCancel) {
+    refs.deleteAccountCancel.disabled = value;
+  }
+  if (refs.deleteAccountConfirm) {
+    refs.deleteAccountConfirm.disabled = value;
   }
   syncAccountControlsDisabled();
   syncProfileEditUI();
@@ -1389,16 +2153,12 @@ function syncAccountControlsDisabled() {
 }
 
 function setAuthStatus(message, type = "info") {
-  if (!refs.authStatus) {
+  syncInlineStatus(refs.authStatus, message, type);
+  if (message) {
+    showToast("auth", message, type);
     return;
   }
-
-  const isError = type === "error";
-  refs.authStatus.setAttribute("aria-live", isError ? "assertive" : "polite");
-  refs.authStatus.setAttribute("role", isError ? "alert" : "status");
-  refs.authStatus.hidden = !message;
-  refs.authStatus.textContent = message || "";
-  refs.authStatus.dataset.type = type;
+  clearToast("auth");
 }
 
 function clearAuthStatus() {
@@ -1406,20 +2166,30 @@ function clearAuthStatus() {
 }
 
 function setProfileStatus(message, type = "info") {
-  if (!refs.profileStatus) {
+  syncInlineStatus(refs.profileStatus, message, type);
+  if (message) {
+    showToast("profile", message, type);
     return;
   }
-
-  const isError = type === "error";
-  refs.profileStatus.setAttribute("aria-live", isError ? "assertive" : "polite");
-  refs.profileStatus.setAttribute("role", isError ? "alert" : "status");
-  refs.profileStatus.hidden = !message;
-  refs.profileStatus.textContent = message || "";
-  refs.profileStatus.dataset.type = type;
+  clearToast("profile");
 }
 
 function clearProfileStatus() {
   setProfileStatus("", "info");
+}
+
+function syncInlineStatus(element, message, type, options = {}) {
+  if (!element) {
+    return;
+  }
+
+  const renderInline = Boolean(options.renderInline);
+  const isError = type === "error";
+  element.setAttribute("aria-live", isError ? "assertive" : "polite");
+  element.setAttribute("role", isError ? "alert" : "status");
+  element.hidden = !renderInline || !message;
+  element.textContent = message || "";
+  element.dataset.type = type;
 }
 
 function syncDueToggleUI() {
@@ -1680,32 +2450,150 @@ function setStatus(message, type = "info", actions = {}) {
   }
 
   const showMessage = Boolean(message);
+  const normalizedType = normalizeToastType(type);
   const showRetry = showMessage && Boolean(actions.retry);
   const showSignIn = showMessage && Boolean(actions.signIn);
-  const showPanel = showMessage || showRetry || showSignIn;
 
   if (refs.statusPanel) {
-    refs.statusPanel.hidden = !showPanel;
+    refs.statusPanel.hidden = true;
   }
 
-  refs.statusLine.hidden = !showMessage;
+  refs.statusLine.hidden = true;
   refs.statusLine.textContent = message || "";
-  refs.statusLine.dataset.type = type;
+  refs.statusLine.dataset.type = normalizedType;
 
-  if (!refs.statusActions || !refs.statusRetry || !refs.statusSignIn) {
-    return;
+  if (showMessage) {
+    showToast("status", message, normalizedType, {
+      retry: showRetry,
+      signIn: showSignIn,
+    });
+  } else {
+    clearToast("status");
   }
 
-  refs.statusRetry.hidden = !showRetry;
-  refs.statusSignIn.hidden = !showSignIn;
-  refs.statusRetry.classList.toggle("is-primary", showRetry);
-  refs.statusSignIn.classList.toggle("is-primary", showSignIn && !showRetry);
-  refs.statusActions.hidden = !showRetry && !showSignIn;
   syncTasksContentLayout();
 }
 
 function clearStatus() {
   setStatus("", "info");
+}
+
+function showToast(source, message, type = "info", actions = {}) {
+  if (!refs.toastRegion) {
+    return;
+  }
+
+  const normalizedType = normalizeToastType(type);
+  const retryAction = Boolean(actions.retry);
+  const signInAction = Boolean(actions.signIn);
+  const shouldAutoDismiss = !retryAction && !signInAction;
+
+  if (state.toastDismissTimeoutId) {
+    clearTimeout(state.toastDismissTimeoutId);
+    state.toastDismissTimeoutId = null;
+  }
+
+  state.activeToastSource = source;
+
+  const toast = document.createElement("article");
+  toast.className = "toast";
+  toast.dataset.type = normalizedType;
+  toast.setAttribute("role", normalizedType === "error" ? "alert" : "status");
+  toast.setAttribute("aria-live", normalizedType === "error" ? "assertive" : "polite");
+
+  const copy = document.createElement("p");
+  copy.className = "toast-copy";
+  copy.textContent = message;
+
+  const controls = document.createElement("div");
+  controls.className = "toast-controls";
+
+  if (retryAction) {
+    controls.append(createToastAction("Retry sync", true, () => {
+      clearToast(source);
+      retryTaskSync();
+    }));
+  }
+
+  if (signInAction) {
+    controls.append(createToastAction("Sign in", !retryAction, () => {
+      clearToast(source);
+      promptSignInFromStatus();
+    }));
+  }
+
+  controls.append(createToastAction("×", false, () => {
+    clearToast(source);
+  }, { close: true }));
+
+  toast.append(copy, controls);
+  refs.toastRegion.replaceChildren(toast);
+  refs.toastRegion.hidden = false;
+
+  requestAnimationFrame(() => {
+    toast.classList.add("is-visible");
+  });
+
+  if (shouldAutoDismiss) {
+    state.toastDismissTimeoutId = window.setTimeout(() => {
+      clearToast(source);
+    }, resolveToastTimeout(normalizedType));
+  }
+}
+
+function clearToast(source = null) {
+  if (!refs.toastRegion) {
+    return;
+  }
+
+  if (source && state.activeToastSource !== source) {
+    return;
+  }
+
+  if (state.toastDismissTimeoutId) {
+    clearTimeout(state.toastDismissTimeoutId);
+    state.toastDismissTimeoutId = null;
+  }
+
+  refs.toastRegion.replaceChildren();
+  refs.toastRegion.hidden = true;
+  state.activeToastSource = null;
+}
+
+function createToastAction(label, primary, onClick, options = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "toast-action";
+  if (primary) {
+    button.classList.add("is-primary");
+  }
+  if (options.close) {
+    button.classList.add("toast-close");
+    button.setAttribute("aria-label", "Dismiss notification");
+  }
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function resolveToastTimeout(type) {
+  if (type === "error") {
+    return 5200;
+  }
+  if (type === "warn") {
+    return 4300;
+  }
+  return 3200;
+}
+
+function normalizeToastType(type) {
+  if (type === "error") {
+    return "error";
+  }
+  if (type === "warn") {
+    return "warn";
+  }
+  return "info";
 }
 
 function normalizedDraftDate(value) {
@@ -2117,12 +3005,23 @@ function normalizeUser(rawUser) {
   const displayNameRaw = typeof rawUser.displayName === "string" ? rawUser.displayName : fallbackDisplayName;
   const displayName = displayNameRaw.trim();
   const createdAt = typeof rawUser.createdAt === "string" ? rawUser.createdAt : null;
+  const emailVerifiedAt = typeof rawUser.emailVerifiedAt === "string" ? rawUser.emailVerifiedAt : null;
+  const emailVerified = rawUser.emailVerified === undefined
+    ? Boolean(emailVerifiedAt)
+    : Boolean(rawUser.emailVerified);
 
   if (!id || !email || !displayName) {
     return null;
   }
 
-  return { id, email, displayName, createdAt };
+  return {
+    id,
+    email,
+    displayName,
+    createdAt,
+    emailVerified,
+    emailVerifiedAt,
+  };
 }
 
 function defaultPrefs() {
@@ -2301,6 +3200,13 @@ async function apiLogout() {
   });
 }
 
+async function apiDeleteAccount(password) {
+  await apiRequest("/auth/account", {
+    method: "DELETE",
+    body: JSON.stringify({ password }),
+  });
+}
+
 async function apiUpdateProfile(displayName) {
   const payload = await apiRequest("/auth/profile", {
     method: "PATCH",
@@ -2309,6 +3215,41 @@ async function apiUpdateProfile(displayName) {
 
   return {
     user: normalizeUser(payload.user),
+  };
+}
+
+async function apiRequestPasswordReset(email) {
+  await apiRequest("/auth/password-reset/request", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+async function apiConfirmPasswordReset(token, password) {
+  await apiRequest("/auth/password-reset/confirm", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
+}
+
+async function apiVerifyEmailToken(token) {
+  const payload = await apiRequest("/auth/email-verification/verify", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+
+  return {
+    alreadyVerified: Boolean(payload.alreadyVerified),
+    user: normalizeUser(payload.user),
+  };
+}
+
+async function apiResendEmailVerification() {
+  const payload = await apiRequest("/auth/email-verification/request", {
+    method: "POST",
+  });
+  return {
+    alreadyVerified: Boolean(payload.alreadyVerified),
   };
 }
 
@@ -2372,13 +3313,36 @@ async function apiDeleteTask(taskId) {
 }
 
 async function apiRequest(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  let csrfToken = "";
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    csrfToken = readCookie("duee_csrf");
+    if (!csrfToken) {
+      try {
+        await fetch(`${API_BASE}/config`, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+      } catch {
+        // Ignore preflight failure and continue with main request.
+      }
+      csrfToken = readCookie("duee_csrf");
+    }
+  }
+
+  const headers = {
+    ...(method === "GET" ? {} : { "Content-Type": "application/json" }),
+    ...(options.headers || {}),
+  };
+  if (csrfToken) {
+    headers["x-csrf-token"] = csrfToken;
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "same-origin",
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
+    method,
+    headers,
   });
 
   const isJson = response.headers.get("content-type")?.includes("application/json");
@@ -2392,6 +3356,37 @@ async function apiRequest(path, options = {}) {
   }
 
   return payload;
+}
+
+function sanitizeAuthActionToken(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const token = value.trim();
+  if (!token || !AUTH_ACTION_TOKEN_REGEX.test(token)) {
+    return "";
+  }
+
+  return token;
+}
+
+function readCookie(name) {
+  if (!document.cookie) {
+    return "";
+  }
+
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = document.cookie.match(new RegExp(`(?:^|; )${escapedName}=([^;]*)`));
+  if (!match) {
+    return "";
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 function isUnauthorizedError(error) {

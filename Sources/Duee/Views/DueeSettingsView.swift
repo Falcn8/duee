@@ -8,6 +8,7 @@ struct DueeSettingsView: View {
     @Binding var appearanceMode: DueeAppearanceMode
     @Binding var colorThemeID: String
     @Binding var customThemeHexes: String
+    @Binding var apiBaseURL: String
     @Environment(\.dismiss) private var dismiss
     @State private var editableCustomHexes = DueeColorThemeCatalog.defaultCustomHexes
 
@@ -31,6 +32,7 @@ struct DueeSettingsView: View {
 #if os(macOS)
                     transparencyCard
 #endif
+                    syncCard
                     appearanceCard
                     colorThemeCard
                 }
@@ -39,7 +41,7 @@ struct DueeSettingsView: View {
         }
         .padding(18)
 #if os(macOS)
-        .frame(width: 380, height: 510)
+        .frame(width: 380, height: 560)
 #else
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 #endif
@@ -129,6 +131,22 @@ struct DueeSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .modifier(SettingsCardStyle(fill: settingsCardFill, stroke: settingsCardStroke))
+    }
+
+    private var syncCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Web API sync")
+                .font(.subheadline)
+
+            TextField("http://localhost:8000", text: $apiBaseURL)
+                .font(.system(.caption, design: .monospaced))
+                .textFieldStyle(.roundedBorder)
+
+            Text("Used by the macOS app to sync tasks with the web API.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .modifier(SettingsCardStyle(fill: settingsCardFill, stroke: settingsCardStroke))
     }
@@ -343,6 +361,7 @@ private struct SettingsCardStyle: ViewModifier {
         unfocusedBackgroundAlpha: .constant(0.78),
         appearanceMode: .constant(.system),
         colorThemeID: .constant(DueeColorThemeCatalog.defaultThemeID),
-        customThemeHexes: .constant(DueeColorThemeCatalog.defaultCustomThemeRawValue)
+        customThemeHexes: .constant(DueeColorThemeCatalog.defaultCustomThemeRawValue),
+        apiBaseURL: .constant("http://localhost:8000")
     )
 }

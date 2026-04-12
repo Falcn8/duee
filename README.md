@@ -17,6 +17,7 @@ A calm Apple-platform app for tracking due-date tasks with a compact floating UI
 ## Features
 
 - Native SwiftUI + SwiftData app for macOS and iOS
+- macOS can sync tasks directly with the web API (`/api`) via a configurable base URL in Settings
 - Compact overlay-style window with custom minimize behavior
 - Keyboard-friendly input (`Return` to add)
 - Status-aware due labels (for active tasks):
@@ -78,7 +79,11 @@ If CloudKit is not enabled, `duee` falls back to local-only storage on that devi
 - `Express` API (`server.js`)
 - MySQL persistence (`tasks` table auto-created at startup)
 - email/password auth with secure cookie sessions
+- email verification and password reset flows (token links via email)
+- CSRF protection for cookie-auth mutating requests
+- auth/task mutation rate limiting and login brute-force throttling
 - welcome account emails via Resend
+- self-serve account data export (`JSON`) and account deletion
 - per-user task isolation (each account gets its own synced task list)
 - mobile-friendly PWA frontend (`index.html`, `app.js`, `app.css`)
 - Home Screen install support in Safari
@@ -99,9 +104,13 @@ cp /opt/apps/duee/.env.example /opt/stacks/apps/duee/.env
    - optional: `SESSION_TTL_DAYS=30`
    - optional: `SESSION_TOUCH_INTERVAL_SECONDS=300` (throttle session write updates)
    - optional: `COOKIE_SECURE=1` (recommended for HTTPS)
+   - optional: `PUBLIC_APP_ORIGIN=https://your.domain` (used for email action links)
    - `RESEND_API_KEY=<resend-api-key>`
    - `RESEND_FROM_EMAIL=<sender@hexagon.one>` (must be on your verified Resend domain)
    - optional: `RESEND_WELCOME_EMAILS=1` (`0` disables welcome emails)
+   - optional: `RESEND_AUTH_EMAILS=1` (`0` disables verification/reset emails)
+   - optional: `EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=1440`
+   - optional: `PASSWORD_RESET_TOKEN_TTL_MINUTES=60`
    - `DB_HOST=mysql-mysql-1` (or your MySQL container DNS name)
    - `DB_USER`, `DB_PASSWORD`
    - optional: `DB_NAME` (default `duee`)

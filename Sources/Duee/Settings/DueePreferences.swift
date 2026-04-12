@@ -35,4 +35,5 @@ enum DueePreferenceKeys {
     static let unfocusedBackgroundAlpha = "unfocusedBackgroundAlpha"
     static let colorThemeID = "colorThemeID"
     static let customThemeHexes = "customThemeHexes"
+    static let apiBaseURL = "apiBaseURL"
 }

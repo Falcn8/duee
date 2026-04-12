@@ -61,6 +61,9 @@
         </label>
         <button id="authSubmit" class="add auth-submit" type="submit">Sign in</button>
       </form>
+      <p id="authForgotRow" class="auth-forgot-row">
+        <button id="authForgotPasswordButton" type="button" class="text-button">Forgot password?</button>
+      </p>
       <p
         id="authStatus"
         class="auth-status"
@@ -104,6 +107,10 @@
             <div class="profile-meta">
               <p class="field-label auth-field-label">Email</p>
               <p id="profileEmail" class="profile-meta-value"></p>
+              <p id="profileEmailVerification" class="profile-meta-subtle"></p>
+              <button id="profileResendVerificationButton" type="button" class="text-button profile-resend-button">
+                Resend verification email
+              </button>
             </div>
             <div class="profile-meta">
               <p class="field-label auth-field-label">Account created</p>
@@ -166,6 +173,23 @@
             <input id="profileSideCalendarToggle" class="pref-switch" type="checkbox" role="switch" />
           </label>
         </div>
+      </section>
+      <section class="settings-card settings-card-danger" aria-label="Data rights">
+        <header class="settings-head">
+          <h3>Data rights</h3>
+          <p class="auth-hint">Export your account data or permanently delete your account.</p>
+        </header>
+        <div class="settings-list">
+          <button id="profileExportDataButton" class="ghost profile-data-action" type="button">
+            Export my data (JSON)
+          </button>
+          <button id="profileDeleteDataButton" class="ghost danger profile-data-action" type="button">
+            Delete my data
+          </button>
+        </div>
+        <p class="pref-hint profile-danger-hint">
+          Deleting your account removes your profile, tasks, sessions, preferences, and related records.
+        </p>
       </section>
     </section>
 
@@ -254,6 +278,16 @@
     </div>
   </main>
 
+  <section
+    id="toastRegion"
+    class="toast-region"
+    role="region"
+    aria-label="Notifications"
+    aria-live="polite"
+    aria-atomic="true"
+    hidden
+  ></section>
+
   <div
     id="calendarDialog"
     class="calendar-dialog"
@@ -311,6 +345,94 @@
       <div class="dialog-actions">
         <button class="ghost" type="button" id="cancelEdit">Cancel</button>
         <button class="add" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="deleteTaskDialog" class="edit-dialog">
+    <section class="edit-form">
+      <h3>Delete task?</h3>
+      <p id="deleteTaskPrompt" class="auth-hint"></p>
+      <div class="dialog-actions">
+        <button id="deleteTaskCancel" class="ghost" type="button">Cancel</button>
+        <button id="deleteTaskConfirm" class="ghost danger" type="button">Delete task</button>
+      </div>
+    </section>
+  </dialog>
+
+  <dialog id="deleteAccountDialog" class="edit-dialog">
+    <form class="edit-form" id="deleteAccountForm">
+      <h3>Delete account</h3>
+      <p class="auth-hint">This permanently deletes your profile, tasks, sessions, and related records.</p>
+      <label class="field">
+        <span class="field-label">Type DELETE to confirm</span>
+        <input id="deleteAccountConfirmInput" type="text" autocomplete="off" required />
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input id="deleteAccountPasswordInput" type="password" autocomplete="current-password" required />
+      </label>
+      <p
+        id="deleteAccountDialogStatus"
+        class="auth-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden
+      ></p>
+      <div class="dialog-actions">
+        <button id="deleteAccountCancel" class="ghost" type="button">Cancel</button>
+        <button id="deleteAccountConfirm" class="ghost danger" type="submit">Delete my account</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="forgotPasswordDialog" class="edit-dialog">
+    <form class="edit-form" id="forgotPasswordForm">
+      <h3>Reset password</h3>
+      <p class="auth-hint">Enter your account email and we'll send you a reset link.</p>
+      <label class="field">
+        <span class="field-label">Email</span>
+        <input id="forgotPasswordEmailInput" type="email" autocomplete="email" required />
+      </label>
+      <p
+        id="forgotPasswordDialogStatus"
+        class="auth-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden
+      ></p>
+      <div class="dialog-actions">
+        <button id="forgotPasswordCancel" class="ghost" type="button">Cancel</button>
+        <button id="forgotPasswordSubmit" class="add" type="submit">Send reset link</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="resetPasswordDialog" class="edit-dialog">
+    <form class="edit-form" id="resetPasswordForm">
+      <h3>Set new password</h3>
+      <p class="auth-hint">Choose a new password for your duee account.</p>
+      <label class="field">
+        <span class="field-label">New password</span>
+        <input id="resetPasswordInput" type="password" autocomplete="new-password" minlength="8" required />
+      </label>
+      <label class="field">
+        <span class="field-label">Confirm password</span>
+        <input id="resetPasswordConfirmInput" type="password" autocomplete="new-password" minlength="8" required />
+      </label>
+      <p
+        id="resetPasswordDialogStatus"
+        class="auth-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden
+      ></p>
+      <div class="dialog-actions">
+        <button id="resetPasswordCancel" class="ghost" type="button">Cancel</button>
+        <button id="resetPasswordSubmit" class="add" type="submit">Update password</button>
       </div>
     </form>
   </dialog>
