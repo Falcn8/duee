@@ -14,7 +14,7 @@
 ### Landing Page + Early Demand Validation
 
 - [ ] Ship simple landing page with:
-  - [ ] Japanese copy as default (with optional English version later)
+  - [ ] Japanese copy as default (with language option for English as well)
   - [ ] value proposition
   - [ ] screenshots / short demo
   - [ ] waitlist form

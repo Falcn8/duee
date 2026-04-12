@@ -214,10 +214,6 @@ h1 {
 }
 
 .profile-page {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  padding: 0.8rem 0.84rem;
   display: grid;
   gap: 0.62rem;
 }
@@ -1394,6 +1390,7 @@ input:focus-visible {
   #addButton {
     min-width: 2.75rem;
   }
+
 }
 
 @media (max-width: 480px) {
