@@ -17,17 +17,54 @@ enum DueeWebAuthMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum DueeWebStatusKind {
+enum DueeWebStatusKind: Equatable {
     case info
     case warning
     case error
 }
 
-struct DueeWebUser: Decodable, Equatable {
+struct DueeWebUser: Codable, Equatable {
     let id: String
     let email: String
     let displayName: String
     let createdAt: String?
+    let emailVerified: Bool
+    let emailVerifiedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case email
+        case displayName
+        case createdAt
+        case emailVerified
+        case emailVerifiedAt
+    }
+
+    init(
+        id: String,
+        email: String,
+        displayName: String,
+        createdAt: String?,
+        emailVerified: Bool,
+        emailVerifiedAt: String?
+    ) {
+        self.id = id
+        self.email = email
+        self.displayName = displayName
+        self.createdAt = createdAt
+        self.emailVerified = emailVerified
+        self.emailVerifiedAt = emailVerifiedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        email = try container.decode(String.self, forKey: .email)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        emailVerifiedAt = try container.decodeIfPresent(String.self, forKey: .emailVerifiedAt)
+        emailVerified = try container.decodeIfPresent(Bool.self, forKey: .emailVerified) ?? (emailVerifiedAt != nil)
+    }
 }
 
 struct DueeWebTaskPayload: Decodable {
@@ -45,6 +82,61 @@ struct DueeWebSessionPayload: Decodable {
     let user: DueeWebUser?
 }
 
+struct DueeWebRegisterPayload: Decodable {
+    let ok: Bool
+    let pendingVerification: Bool
+    let email: String?
+    let verificationEmailSent: Bool?
+}
+
+struct DueeWebVerificationRequestPayload: Decodable {
+    let ok: Bool?
+    let alreadyVerified: Bool?
+}
+
+private struct DueeDeveloperTaskRecord: Codable {
+    let text: String
+    let hasDueDate: Bool
+    let dueDate: String?
+    let isCompleted: Bool
+    let createdAt: String?
+    let completedAt: String?
+}
+
+private struct DueeDeveloperTaskExportPayload: Codable {
+    let version: Int
+    let exportedAt: String
+    let taskCount: Int
+    let tasks: [DueeDeveloperTaskRecord]
+}
+
+private struct DueeDeveloperSnapshotCounts: Codable {
+    let total: Int
+    let active: Int
+    let completed: Int
+}
+
+private struct DueeDeveloperSnapshotPayload: Codable {
+    let version: Int
+    let exportedAt: String
+    let user: DueeWebUser?
+    let authMode: String
+    let showVerifySentPage: Bool
+    let postRegisterEmail: String
+    let postRegisterVerificationEmailSent: Bool
+    let statusMessage: String
+    let statusKind: String
+    let tasks: [DueeDeveloperTaskRecord]
+    let counts: DueeDeveloperSnapshotCounts
+}
+
+private struct DueeDeveloperImportedTask {
+    let text: String
+    let hasDueDate: Bool
+    let dueDate: Date?
+    let isCompleted: Bool
+}
+
 @MainActor
 final class DueeWebStore: ObservableObject {
     @Published private(set) var tasks: [DueeTask] = []
@@ -53,6 +145,9 @@ final class DueeWebStore: ObservableObject {
     @Published var authDisplayName = ""
     @Published var authEmail = ""
     @Published var authPassword = ""
+    @Published private(set) var showVerifySentPage = false
+    @Published private(set) var postRegisterEmail = ""
+    @Published private(set) var postRegisterVerificationEmailSent = true
     @Published private(set) var isBootstrapping = false
     @Published private(set) var isMutating = false
     @Published private(set) var statusMessage = ""
@@ -63,6 +158,24 @@ final class DueeWebStore: ObservableObject {
 
     var isSignedIn: Bool {
         sessionUser != nil
+    }
+
+    var requiresEmailVerification: Bool {
+        guard let sessionUser else { return false }
+        return !sessionUser.emailVerified
+    }
+
+    var isSignedInAndUnverified: Bool {
+        sessionUser != nil && requiresEmailVerification
+    }
+
+    var verifyPageEmail: String {
+        let signedInEmail = sessionUser?.email.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !signedInEmail.isEmpty {
+            return signedInEmail
+        }
+
+        return postRegisterEmail.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var canSubmitAuth: Bool {
@@ -93,6 +206,9 @@ final class DueeWebStore: ObservableObject {
             activeBaseURLString = resolvedURL.absoluteString
             sessionUser = nil
             tasks = []
+            showVerifySentPage = false
+            postRegisterEmail = ""
+            postRegisterVerificationEmailSent = true
         }
 
         guard let client else { return }
@@ -107,11 +223,26 @@ final class DueeWebStore: ObservableObject {
             guard session.authenticated, let user = session.user else {
                 sessionUser = nil
                 tasks = []
+                showVerifySentPage = false
+                postRegisterEmail = ""
+                postRegisterVerificationEmailSent = true
                 setStatus("Sign in to sync tasks from your web account.", kind: .info)
                 return
             }
 
             sessionUser = user
+            if !user.emailVerified {
+                tasks = []
+                showVerifySentPage = true
+                postRegisterEmail = user.email
+                postRegisterVerificationEmailSent = true
+                setStatus("Verify your email before using duee.", kind: .warning)
+                return
+            }
+
+            showVerifySentPage = false
+            postRegisterEmail = ""
+            postRegisterVerificationEmailSent = true
             try await loadTasks(using: client)
             clearStatus()
         } catch {
@@ -139,20 +270,42 @@ final class DueeWebStore: ObservableObject {
         do {
             try await client.ensureCsrfToken()
 
-            let user: DueeWebUser
             switch authMode {
             case .signIn:
-                user = try await client.login(email: email, password: password)
+                let user = try await client.login(email: email, password: password)
+                authPassword = ""
+                sessionUser = user
+
+                if !user.emailVerified {
+                    tasks = []
+                    showVerifySentPage = true
+                    postRegisterEmail = user.email
+                    postRegisterVerificationEmailSent = true
+                    setStatus("Verify your email before using duee.", kind: .warning)
+                    return
+                }
+
+                showVerifySentPage = false
+                postRegisterEmail = ""
+                postRegisterVerificationEmailSent = true
+                try await loadTasks(using: client)
+                clearStatus()
             case .register:
                 let displayName = authDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-                user = try await client.register(email: email, password: password, displayName: displayName)
+                let response = try await client.register(email: email, password: password, displayName: displayName)
                 authMode = .signIn
+                authPassword = ""
+                sessionUser = nil
+                tasks = []
+                showVerifySentPage = true
+                postRegisterEmail = (response.email ?? email).trimmingCharacters(in: .whitespacesAndNewlines)
+                postRegisterVerificationEmailSent = response.verificationEmailSent ?? true
+                if postRegisterVerificationEmailSent {
+                    setStatus("Verification email sent. Check your inbox, then sign in.", kind: .info)
+                } else {
+                    setStatus("Account created, but verification email delivery failed. Resend it now.", kind: .warning)
+                }
             }
-
-            sessionUser = user
-            authPassword = ""
-            try await loadTasks(using: client)
-            clearStatus()
         } catch {
             applyError(error, fallback: "Authentication failed.")
         }
@@ -162,6 +315,9 @@ final class DueeWebStore: ObservableObject {
         guard let client else {
             sessionUser = nil
             tasks = []
+            showVerifySentPage = false
+            postRegisterEmail = ""
+            postRegisterVerificationEmailSent = true
             return
         }
 
@@ -178,6 +334,9 @@ final class DueeWebStore: ObservableObject {
         sessionUser = nil
         tasks = []
         authPassword = ""
+        showVerifySentPage = false
+        postRegisterEmail = ""
+        postRegisterVerificationEmailSent = true
         setStatus("Signed out.", kind: .info)
     }
 
@@ -189,6 +348,12 @@ final class DueeWebStore: ObservableObject {
 
         guard sessionUser != nil else {
             setStatus("Sign in to load tasks.", kind: .info)
+            return
+        }
+
+        guard !requiresEmailVerification else {
+            tasks = []
+            setStatus("Verify your email before using duee.", kind: .warning)
             return
         }
 
@@ -220,6 +385,11 @@ final class DueeWebStore: ObservableObject {
             return false
         }
 
+        guard !requiresEmailVerification else {
+            setStatus("Verify your email before creating tasks.", kind: .warning)
+            return false
+        }
+
         isMutating = true
         defer { isMutating = false }
 
@@ -243,6 +413,11 @@ final class DueeWebStore: ObservableObject {
 
         guard sessionUser != nil else {
             setStatus("Please sign in to update tasks.", kind: .warning)
+            return
+        }
+
+        guard !requiresEmailVerification else {
+            setStatus("Verify your email before updating tasks.", kind: .warning)
             return
         }
 
@@ -282,6 +457,11 @@ final class DueeWebStore: ObservableObject {
             return
         }
 
+        guard !requiresEmailVerification else {
+            setStatus("Verify your email before editing tasks.", kind: .warning)
+            return
+        }
+
         isMutating = true
         defer { isMutating = false }
 
@@ -312,6 +492,11 @@ final class DueeWebStore: ObservableObject {
             return
         }
 
+        guard !requiresEmailVerification else {
+            setStatus("Verify your email before deleting tasks.", kind: .warning)
+            return
+        }
+
         isMutating = true
         defer { isMutating = false }
 
@@ -322,6 +507,226 @@ final class DueeWebStore: ObservableObject {
             clearStatus()
         } catch {
             applyError(error, fallback: "Could not delete task.")
+        }
+    }
+
+    func dismissVerificationPromptToSignIn() {
+        guard !isSignedInAndUnverified else {
+            return
+        }
+
+        showVerifySentPage = false
+        clearStatus()
+    }
+
+    func resendVerificationFromVerifyPage() async {
+        guard let client else {
+            setStatus("Web API is not configured.", kind: .error)
+            return
+        }
+
+        let email = verifyPageEmail
+        guard !email.isEmpty else {
+            setStatus("We need your email to resend verification.", kind: .warning)
+            return
+        }
+
+        isMutating = true
+        defer { isMutating = false }
+
+        do {
+            try await client.ensureCsrfToken()
+            if isSignedInAndUnverified {
+                let payload = try await client.resendEmailVerification()
+                if payload.alreadyVerified ?? false, let user = sessionUser {
+                    sessionUser = DueeWebUser(
+                        id: user.id,
+                        email: user.email,
+                        displayName: user.displayName,
+                        createdAt: user.createdAt,
+                        emailVerified: true,
+                        emailVerifiedAt: user.emailVerifiedAt ?? Self.isoDateTimeString(from: .now)
+                    )
+                    showVerifySentPage = false
+                    postRegisterEmail = ""
+                    postRegisterVerificationEmailSent = true
+                    try await loadTasks(using: client)
+                    setStatus("Email is already verified. You can continue.", kind: .info)
+                    return
+                }
+                setStatus("Verification email sent. Check your inbox.", kind: .info)
+            } else {
+                try await client.resendEmailVerification(email: email)
+                setStatus("Verification email sent. Check your inbox, then sign in.", kind: .info)
+            }
+
+            postRegisterEmail = email
+            postRegisterVerificationEmailSent = true
+        } catch {
+            applyError(error, fallback: "Could not resend verification email.")
+        }
+    }
+
+    func deleteAccount(password: String) async {
+        let cleanedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedPassword.isEmpty else {
+            setStatus("Password is required to delete your account.", kind: .warning)
+            return
+        }
+
+        guard let client else {
+            setStatus("Web API is not configured.", kind: .error)
+            return
+        }
+
+        guard sessionUser != nil else {
+            setStatus("Sign in to delete your account.", kind: .warning)
+            return
+        }
+
+        isMutating = true
+        defer { isMutating = false }
+
+        do {
+            try await client.ensureCsrfToken()
+            try await client.deleteAccount(password: cleanedPassword)
+            sessionUser = nil
+            tasks = []
+            authPassword = ""
+            showVerifySentPage = false
+            postRegisterEmail = ""
+            postRegisterVerificationEmailSent = true
+            setStatus("Your account has been deleted.", kind: .info)
+        } catch {
+            applyError(error, fallback: "Could not delete account.")
+        }
+    }
+
+    func exportTodoListForDeveloperData() throws -> Data {
+        try assertDeveloperToolsAvailable()
+        let taskRecords = tasks.map(Self.developerRecord(from:))
+        let payload = DueeDeveloperTaskExportPayload(
+            version: 1,
+            exportedAt: Self.isoDateTimeString(from: .now) ?? ISO8601DateFormatter().string(from: .now),
+            taskCount: taskRecords.count,
+            tasks: taskRecords
+        )
+        let data = try Self.developerJSONEncoder.encode(payload)
+        setStatus("Todo list exported.", kind: .info)
+        return data
+    }
+
+    func exportDebugSnapshotForDeveloperData() throws -> Data {
+        try assertDeveloperToolsAvailable()
+        let taskRecords = tasks.map(Self.developerRecord(from:))
+        let completedCount = taskRecords.filter(\.isCompleted).count
+        let payload = DueeDeveloperSnapshotPayload(
+            version: 1,
+            exportedAt: Self.isoDateTimeString(from: .now) ?? ISO8601DateFormatter().string(from: .now),
+            user: sessionUser,
+            authMode: authMode.rawValue,
+            showVerifySentPage: showVerifySentPage,
+            postRegisterEmail: postRegisterEmail,
+            postRegisterVerificationEmailSent: postRegisterVerificationEmailSent,
+            statusMessage: statusMessage,
+            statusKind: Self.statusKindRawValue(statusKind),
+            tasks: taskRecords,
+            counts: DueeDeveloperSnapshotCounts(
+                total: taskRecords.count,
+                active: taskRecords.count - completedCount,
+                completed: completedCount
+            )
+        )
+        let data = try Self.developerJSONEncoder.encode(payload)
+        setStatus("Debug snapshot exported.", kind: .info)
+        return data
+    }
+
+    func importTodoListForDeveloper(data: Data, replace: Bool) async {
+        guard let client else {
+            setStatus("Web API is not configured.", kind: .error)
+            return
+        }
+
+        do {
+            try assertDeveloperToolsAvailable()
+            let importedTasks = try Self.parseImportedTasksForDeveloper(data)
+
+            isMutating = true
+            defer { isMutating = false }
+
+            try await client.ensureCsrfToken()
+            if replace {
+                let existingTaskIDs = tasks.map { $0.id.uuidString.lowercased() }
+                for taskID in existingTaskIDs {
+                    try await client.deleteTask(id: taskID)
+                }
+            }
+
+            for importedTask in importedTasks {
+                let created = try await client.createTask(
+                    text: importedTask.text,
+                    dueDate: importedTask.hasDueDate ? importedTask.dueDate.map(Self.isoDayString(from:)) : nil
+                )
+
+                if importedTask.isCompleted {
+                    _ = try await client.updateTask(
+                        id: created.id,
+                        text: nil,
+                        hasDueDate: nil,
+                        dueDate: nil,
+                        isCompleted: true
+                    )
+                }
+            }
+
+            try await loadTasks(using: client)
+            if replace {
+                setStatus("Imported \(importedTasks.count) tasks and replaced existing tasks.", kind: .info)
+            } else {
+                setStatus("Imported \(importedTasks.count) tasks.", kind: .info)
+            }
+        } catch {
+            applyError(error, fallback: "Could not import todo list.")
+        }
+    }
+
+    func clearCompletedTasksForDeveloper() async {
+        guard let client else {
+            setStatus("Web API is not configured.", kind: .error)
+            return
+        }
+
+        do {
+            try assertDeveloperToolsAvailable()
+            let completedTaskIDs = tasks
+                .filter(\.isCompleted)
+                .map { $0.id.uuidString.lowercased() }
+
+            guard !completedTaskIDs.isEmpty else {
+                setStatus("No completed tasks to clear.", kind: .info)
+                return
+            }
+
+            isMutating = true
+            defer { isMutating = false }
+
+            try await client.ensureCsrfToken()
+            for taskID in completedTaskIDs {
+                try await client.deleteTask(id: taskID)
+            }
+            try await loadTasks(using: client)
+            setStatus("Cleared \(completedTaskIDs.count) completed tasks.", kind: .info)
+        } catch {
+            applyError(error, fallback: "Could not clear completed tasks.")
+        }
+    }
+
+    func forceSyncForDeveloper() async {
+        setStatus("Syncing...", kind: .info)
+        await refreshTasks()
+        if statusKind == .info || statusMessage.isEmpty {
+            setStatus("Sync complete.", kind: .info)
         }
     }
 
@@ -354,7 +759,22 @@ final class DueeWebStore: ObservableObject {
             if apiError.statusCode == 401 {
                 sessionUser = nil
                 tasks = []
+                showVerifySentPage = false
+                postRegisterEmail = ""
+                postRegisterVerificationEmailSent = true
                 setStatus("Session expired. Sign in again.", kind: .warning)
+                return
+            }
+
+            if apiError.statusCode == 403,
+               let user = sessionUser,
+               !user.emailVerified,
+               apiError.message.localizedCaseInsensitiveContains("verify your email") {
+                tasks = []
+                showVerifySentPage = true
+                postRegisterEmail = user.email
+                postRegisterVerificationEmailSent = true
+                setStatus("Verify your email before using duee.", kind: .warning)
                 return
             }
 
@@ -424,10 +844,29 @@ final class DueeWebStore: ObservableObject {
         return formatter
     }()
 
+    private static let isoDateFormatterOut: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let developerJSONEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
+
     private static func parseISODateTime(_ value: String?) -> Date? {
         guard let value else { return nil }
         return isoDateFormatterWithFractional.date(from: value)
             ?? isoDateFormatter.date(from: value)
+    }
+
+    private static func isoDateTimeString(from date: Date?) -> String? {
+        guard let date else {
+            return nil
+        }
+        return isoDateFormatterOut.string(from: date)
     }
 
     private static func isoDayString(from date: Date) -> String {
@@ -437,6 +876,108 @@ final class DueeWebStore: ObservableObject {
         let month = components.month ?? 1
         let day = components.day ?? 1
         return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    private func assertDeveloperToolsAvailable() throws {
+        guard sessionUser != nil else {
+            throw DueeWebAPIError(message: "Sign in to use developer tools.", statusCode: nil)
+        }
+        guard !requiresEmailVerification else {
+            throw DueeWebAPIError(message: "Verify your email before using developer tools.", statusCode: 403)
+        }
+    }
+
+    private static func statusKindRawValue(_ kind: DueeWebStatusKind) -> String {
+        switch kind {
+        case .info:
+            return "info"
+        case .warning:
+            return "warning"
+        case .error:
+            return "error"
+        }
+    }
+
+    private static func developerRecord(from task: DueeTask) -> DueeDeveloperTaskRecord {
+        DueeDeveloperTaskRecord(
+            text: task.text,
+            hasDueDate: task.hasDueDate,
+            dueDate: task.hasDueDate ? isoDayString(from: task.dueDate) : nil,
+            isCompleted: task.isCompleted,
+            createdAt: isoDateTimeString(from: task.createdAt),
+            completedAt: isoDateTimeString(from: task.completedAt)
+        )
+    }
+
+    private static func parseImportedTasksForDeveloper(_ data: Data) throws -> [DueeDeveloperImportedTask] {
+        let parsed = try JSONSerialization.jsonObject(with: data)
+
+        let taskCandidates: [Any]
+        if let array = parsed as? [Any] {
+            taskCandidates = array
+        } else if let object = parsed as? [String: Any], let tasks = object["tasks"] as? [Any] {
+            taskCandidates = tasks
+        } else {
+            throw DueeWebAPIError(
+                message: "Import file must be a JSON array or an object with a tasks array.",
+                statusCode: nil
+            )
+        }
+
+        let normalized = taskCandidates.compactMap(Self.normalizeImportedTaskForDeveloper(_:))
+        guard !normalized.isEmpty else {
+            throw DueeWebAPIError(message: "Import file does not contain any valid tasks.", statusCode: nil)
+        }
+
+        return normalized
+    }
+
+    private static func normalizeImportedTaskForDeveloper(_ candidate: Any) -> DueeDeveloperImportedTask? {
+        guard let task = candidate as? [String: Any] else {
+            return nil
+        }
+
+        let text = (task["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            return nil
+        }
+
+        let rawDueDate = (task["dueDate"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasDueDate = task["hasDueDate"] != nil
+            ? boolValue(task["hasDueDate"])
+            : ((rawDueDate?.isEmpty == false))
+
+        let dueDate = hasDueDate ? parseIsoDay(rawDueDate) : nil
+        let isCompleted = boolValue(task["isCompleted"])
+
+        return DueeDeveloperImportedTask(
+            text: text,
+            hasDueDate: dueDate != nil,
+            dueDate: dueDate,
+            isCompleted: isCompleted
+        )
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool {
+        if let bool = value as? Bool {
+            return bool
+        }
+
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+
+        if let string = value as? String {
+            switch string.lowercased() {
+            case "1", "true", "yes", "on":
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
     }
 }
 
@@ -484,18 +1025,33 @@ actor DueeWebAPIClient {
         return user
     }
 
-    func register(email: String, password: String, displayName: String) async throws -> DueeWebUser {
+    func register(email: String, password: String, displayName: String) async throws -> DueeWebRegisterPayload {
         let payload = DueeAuthRequest(email: email, password: password, displayName: displayName)
         let data = try await request(path: "/auth/register", method: "POST", body: try encoder.encode(payload))
-        let envelope = try decoder.decode(DueeUserEnvelope.self, from: data)
-        guard let user = envelope.user else {
-            throw DueeWebAPIError(message: "Registration response was invalid.", statusCode: nil)
-        }
-        return user
+        return try decoder.decode(DueeWebRegisterPayload.self, from: data)
     }
 
     func logout() async throws {
         _ = try await request(path: "/auth/logout", method: "POST", body: nil)
+    }
+
+    func resendEmailVerification() async throws -> DueeWebVerificationRequestPayload {
+        let data = try await request(path: "/auth/email-verification/request", method: "POST", body: nil)
+        return try decoder.decode(DueeWebVerificationRequestPayload.self, from: data)
+    }
+
+    func resendEmailVerification(email: String) async throws {
+        let payload = DueeEmailVerificationRequest(email: email)
+        _ = try await request(
+            path: "/auth/email-verification/request",
+            method: "POST",
+            body: try encoder.encode(payload)
+        )
+    }
+
+    func deleteAccount(password: String) async throws {
+        let payload = DueeAccountDeleteRequest(password: password)
+        _ = try await request(path: "/auth/account", method: "DELETE", body: try encoder.encode(payload))
     }
 
     func fetchTasks() async throws -> [DueeWebTaskPayload] {
@@ -667,4 +1223,12 @@ private struct DueeTaskMutationRequest: Encodable {
     let hasDueDate: Bool?
     let dueDate: String?
     let isCompleted: Bool?
+}
+
+private struct DueeEmailVerificationRequest: Encodable {
+    let email: String
+}
+
+private struct DueeAccountDeleteRequest: Encodable {
+    let password: String
 }

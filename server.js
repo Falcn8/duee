@@ -48,6 +48,22 @@ const TASK_MUTATION_RATE_LIMIT_MAX_REQUESTS = Number.parseInt(
 const LOGIN_BRUTE_FORCE_WINDOW_MS = Number.parseInt(process.env.LOGIN_BRUTE_FORCE_WINDOW_MS ?? "900000", 10);
 const LOGIN_BRUTE_FORCE_MAX_FAILURES = Number.parseInt(process.env.LOGIN_BRUTE_FORCE_MAX_FAILURES ?? "5", 10);
 const LOGIN_BRUTE_FORCE_LOCK_MS = Number.parseInt(process.env.LOGIN_BRUTE_FORCE_LOCK_MS ?? "900000", 10);
+const UNVERIFIED_ACCOUNT_RETENTION_DAYS = Number.parseInt(
+  process.env.UNVERIFIED_ACCOUNT_RETENTION_DAYS ?? "30",
+  10
+);
+const UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE = Number.parseInt(
+  process.env.UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE ?? "7",
+  10
+);
+const UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS = Number.parseInt(
+  process.env.UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS ?? "24",
+  10
+);
+const UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE = Number.parseInt(
+  process.env.UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE ?? "250",
+  10
+);
 
 const MAX_TASK_TEXT_LENGTH = 240;
 const MIN_PASSWORD_LENGTH = 8;
@@ -66,6 +82,8 @@ const CSRF_HEADER_NAME = "x-csrf-token";
 const SESSION_TTL_MS = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
 const EMAIL_VERIFICATION_TOKEN_TTL_MS = EMAIL_VERIFICATION_TOKEN_TTL_MINUTES * 60 * 1000;
 const PASSWORD_RESET_TOKEN_TTL_MS = PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000;
+const UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_MS = UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS * 60 * 60 * 1000;
+const UNVERIFIED_ACCOUNT_CLEANUP_LOCK_NAME = "duee_unverified_account_cleanup";
 const DEFAULT_USER_PREFERENCES = Object.freeze({
   hideDone: false,
   receiveUpdates: true,
@@ -114,6 +132,40 @@ if (
   throw new Error("PASSWORD_RESET_TOKEN_TTL_MINUTES must be between 5 and 10080.");
 }
 
+if (
+  !Number.isFinite(UNVERIFIED_ACCOUNT_RETENTION_DAYS)
+  || UNVERIFIED_ACCOUNT_RETENTION_DAYS < 1
+  || UNVERIFIED_ACCOUNT_RETENTION_DAYS > 3650
+) {
+  throw new Error("UNVERIFIED_ACCOUNT_RETENTION_DAYS must be between 1 and 3650.");
+}
+
+if (
+  !Number.isFinite(UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE)
+  || UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE < 0
+  || UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE >= UNVERIFIED_ACCOUNT_RETENTION_DAYS
+) {
+  throw new Error(
+    "UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE must be between 0 and UNVERIFIED_ACCOUNT_RETENTION_DAYS - 1."
+  );
+}
+
+if (
+  !Number.isFinite(UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS)
+  || UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS < 1
+  || UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS > 168
+) {
+  throw new Error("UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS must be between 1 and 168.");
+}
+
+if (
+  !Number.isFinite(UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE)
+  || UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE < 1
+  || UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE > 5000
+) {
+  throw new Error("UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE must be between 1 and 5000.");
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const scryptAsync = promisify(crypto.scrypt);
@@ -144,6 +196,8 @@ app.use(requireCsrfForMutations);
 app.use(attachAuthSession);
 
 let pool;
+let unverifiedAccountCleanupTimer = null;
+let unverifiedAccountCleanupInFlight = false;
 
 app.get("/api/config", (_req, res) => {
   res.json({
@@ -187,32 +241,53 @@ app.get("/api/auth/session", (_req, res) => {
 app.post(
   "/api/auth/email-verification/request",
   requireDatabaseMode,
-  requireAuth,
   authRateLimiter,
   async (req, res, next) => {
     try {
-      if (req.authUser.emailVerified) {
-        res.json({ ok: true, alreadyVerified: true });
+      assertAuthEmailDeliveryConfigured();
+      const requestedEmail = req.authUser
+        ? req.authUser.email
+        : normalizeEmail(req.body?.email);
+
+      const user = req.authUser || await getUserByEmail(requestedEmail);
+      if (!user) {
+        res.json({ ok: true });
+        return;
+      }
+
+      if (user.emailVerified) {
+        if (req.authUser) {
+          res.json({ ok: true, alreadyVerified: true });
+        } else {
+          res.json({ ok: true });
+        }
         return;
       }
 
       const verification = await issueEmailVerificationEmail({
-        userId: req.authUser.id,
-        toEmail: req.authUser.email,
-        displayName: req.authUser.displayName,
+        userId: user.id,
+        toEmail: user.email,
+        displayName: user.displayName,
         req,
+        includeWelcome: false,
       });
 
       await logAuditEvent({
-        userId: req.authUser.id,
+        userId: user.id,
         action: "email_verification_requested",
         req,
         details: {
+          source: req.authUser ? "profile" : "public_request",
           expiresAt: verification.expiresAt,
         },
       });
 
-      res.json({ ok: true, alreadyVerified: false });
+      if (req.authUser) {
+        res.json({ ok: true, alreadyVerified: false });
+        return;
+      }
+
+      res.json({ ok: true });
     } catch (error) {
       next(error);
     }
@@ -305,6 +380,8 @@ app.post("/api/auth/password-reset/confirm", requireDatabaseMode, authRateLimite
 
 app.post("/api/auth/register", requireDatabaseMode, authRateLimiter, async (req, res, next) => {
   try {
+    assertAuthEmailDeliveryConfigured();
+    assertPublicAppOriginConfigured(req);
     const email = normalizeEmail(req.body?.email);
     const displayName = normalizeDisplayName(req.body?.displayName, email);
     const password = normalizePassword(req.body?.password);
@@ -325,49 +402,41 @@ app.post("/api/auth/register", requireDatabaseMode, authRateLimiter, async (req,
       await pool.query("UPDATE tasks SET user_id = ? WHERE user_id IS NULL", [userId]);
     }
 
-    await createSessionForUser(userId, res);
-    const user = await getUserById(userId);
-
-    if (RESEND_WELCOME_EMAILS) {
-      sendWelcomeEmail({
+    let verification = null;
+    try {
+      verification = await issueEmailVerificationEmail({
+        userId,
         toEmail: email,
         displayName,
-      }).catch((sendError) => {
-        console.error("Failed to send welcome email:", sendError);
+        req,
+        includeWelcome: RESEND_WELCOME_EMAILS,
+      });
+      await logAuditEvent({
+        userId,
+        action: "email_verification_requested",
+        req,
+        details: {
+          source: "register",
+          expiresAt: verification.expiresAt,
+        },
+      });
+    } catch (sendError) {
+      console.error("Failed to send verification email during registration:", sendError);
+      await logAuditEvent({
+        userId,
+        action: "email_verification_request_failed",
+        req,
+        details: {
+          source: "register",
+        },
       });
     }
 
-    if (RESEND_AUTH_EMAILS) {
-      try {
-        const verification = await issueEmailVerificationEmail({
-          userId,
-          toEmail: email,
-          displayName,
-          req,
-        });
-        await logAuditEvent({
-          userId,
-          action: "email_verification_requested",
-          req,
-          details: {
-            source: "register",
-            expiresAt: verification.expiresAt,
-          },
-        });
-      } catch (sendError) {
-        console.error("Failed to send verification email:", sendError);
-      }
-    }
-
     res.status(201).json({
-      user: user ? toApiUser(user) : {
-        id: userId,
-        email,
-        displayName,
-        createdAt: new Date().toISOString(),
-        emailVerified: false,
-        emailVerifiedAt: null,
-      },
+      ok: true,
+      pendingVerification: true,
+      email,
+      verificationEmailSent: Boolean(verification),
     });
   } catch (error) {
     if (error?.code === "ER_DUP_ENTRY") {
@@ -401,6 +470,7 @@ app.post("/api/auth/login", requireDatabaseMode, authRateLimiter, async (req, re
 
     const user = rows[0];
     clearFailedLoginAttempts(email, req);
+
     await createSessionForUser(user.id, res);
 
     res.json({
@@ -411,7 +481,13 @@ app.post("/api/auth/login", requireDatabaseMode, authRateLimiter, async (req, re
   }
 });
 
-app.patch("/api/auth/profile", requireDatabaseMode, requireAuth, authRateLimiter, async (req, res, next) => {
+app.patch(
+  "/api/auth/profile",
+  requireDatabaseMode,
+  requireAuth,
+  requireVerifiedEmail,
+  authRateLimiter,
+  async (req, res, next) => {
   try {
     const displayName = normalizeDisplayName(req.body?.displayName, req.authUser.email);
 
@@ -432,9 +508,16 @@ app.patch("/api/auth/profile", requireDatabaseMode, requireAuth, authRateLimiter
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.get("/api/auth/export", requireDatabaseMode, requireAuth, authRateLimiter, async (req, res, next) => {
+app.get(
+  "/api/auth/export",
+  requireDatabaseMode,
+  requireAuth,
+  requireVerifiedEmail,
+  authRateLimiter,
+  async (req, res, next) => {
   try {
     const payload = await buildAccountExportPayload(req.authUser.id);
     await logAuditEvent({
@@ -450,9 +533,16 @@ app.get("/api/auth/export", requireDatabaseMode, requireAuth, authRateLimiter, a
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.get("/api/auth/export/download", requireDatabaseMode, requireAuth, authRateLimiter, async (req, res, next) => {
+app.get(
+  "/api/auth/export/download",
+  requireDatabaseMode,
+  requireAuth,
+  requireVerifiedEmail,
+  authRateLimiter,
+  async (req, res, next) => {
   try {
     const payload = await buildAccountExportPayload(req.authUser.id);
     await logAuditEvent({
@@ -473,9 +563,15 @@ app.get("/api/auth/export/download", requireDatabaseMode, requireAuth, authRateL
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.delete("/api/auth/account", requireDatabaseMode, requireAuth, authRateLimiter, async (req, res, next) => {
+app.delete(
+  "/api/auth/account",
+  requireDatabaseMode,
+  requireAuth,
+  authRateLimiter,
+  async (req, res, next) => {
   const userId = req.authUser.id;
 
   try {
@@ -498,23 +594,7 @@ app.delete("/api/auth/account", requireDatabaseMode, requireAuth, authRateLimite
       throw unauthorized("Password is incorrect.");
     }
 
-    const connection = await pool.getConnection();
-    try {
-      await connection.beginTransaction();
-      await connection.query("DELETE FROM tasks WHERE user_id = ?", [userId]);
-      await connection.query("DELETE FROM user_preferences WHERE user_id = ?", [userId]);
-      await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
-      await connection.query("DELETE FROM email_verification_tokens WHERE user_id = ?", [userId]);
-      await connection.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [userId]);
-      await connection.query("DELETE FROM audit_logs WHERE user_id = ?", [userId]);
-      await connection.query("DELETE FROM users WHERE id = ?", [userId]);
-      await connection.commit();
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
-    }
+    await deleteUserAccountData(userId);
 
     clearAuthCookie(res);
     clearCsrfCookie(res);
@@ -530,9 +610,10 @@ app.delete("/api/auth/account", requireDatabaseMode, requireAuth, authRateLimite
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.get("/api/prefs", requireDatabaseMode, requireAuth, async (req, res, next) => {
+app.get("/api/prefs", requireDatabaseMode, requireAuth, requireVerifiedEmail, async (req, res, next) => {
   try {
     const prefs = await getUserPreferences(req.authUser.id);
     res.json({ prefs });
@@ -541,7 +622,7 @@ app.get("/api/prefs", requireDatabaseMode, requireAuth, async (req, res, next) =
   }
 });
 
-app.patch("/api/prefs", requireDatabaseMode, requireAuth, async (req, res, next) => {
+app.patch("/api/prefs", requireDatabaseMode, requireAuth, requireVerifiedEmail, async (req, res, next) => {
   try {
     const patch = normalizePreferencePatch(req.body);
     const current = await getUserPreferences(req.authUser.id);
@@ -576,7 +657,7 @@ app.post("/api/auth/logout", authRateLimiter, async (req, res, next) => {
   }
 });
 
-app.get("/api/tasks", requireDatabaseMode, requireAuth, async (req, res, next) => {
+app.get("/api/tasks", requireDatabaseMode, requireAuth, requireVerifiedEmail, async (req, res, next) => {
   try {
     const [rows] = await pool.query(
       `
@@ -594,7 +675,13 @@ app.get("/api/tasks", requireDatabaseMode, requireAuth, async (req, res, next) =
   }
 });
 
-app.post("/api/tasks", requireDatabaseMode, requireAuth, taskMutationRateLimiter, async (req, res, next) => {
+app.post(
+  "/api/tasks",
+  requireDatabaseMode,
+  requireAuth,
+  requireVerifiedEmail,
+  taskMutationRateLimiter,
+  async (req, res, next) => {
   try {
     const text = normalizeTaskText(req.body?.text);
     const hasDueDate = req.body?.hasDueDate !== undefined ? Boolean(req.body.hasDueDate) : true;
@@ -615,9 +702,16 @@ app.post("/api/tasks", requireDatabaseMode, requireAuth, taskMutationRateLimiter
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.patch("/api/tasks/:id", requireDatabaseMode, requireAuth, taskMutationRateLimiter, async (req, res, next) => {
+app.patch(
+  "/api/tasks/:id",
+  requireDatabaseMode,
+  requireAuth,
+  requireVerifiedEmail,
+  taskMutationRateLimiter,
+  async (req, res, next) => {
   try {
     const taskId = normalizeUUID(req.params.id, "Task ID");
     const existing = await getTaskById(taskId, req.authUser.id, true);
@@ -676,9 +770,16 @@ app.patch("/api/tasks/:id", requireDatabaseMode, requireAuth, taskMutationRateLi
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
-app.delete("/api/tasks/:id", requireDatabaseMode, requireAuth, taskMutationRateLimiter, async (req, res, next) => {
+app.delete(
+  "/api/tasks/:id",
+  requireDatabaseMode,
+  requireAuth,
+  requireVerifiedEmail,
+  taskMutationRateLimiter,
+  async (req, res, next) => {
   try {
     const taskId = normalizeUUID(req.params.id, "Task ID");
     const [result] = await pool.query(
@@ -695,7 +796,8 @@ app.delete("/api/tasks/:id", requireDatabaseMode, requireAuth, taskMutationRateL
   } catch (error) {
     next(error);
   }
-});
+  }
+);
 
 app.use(express.static(__dirname));
 
@@ -737,8 +839,10 @@ async function main() {
   const server = app.listen(APP_PORT, () => {
     console.log(`duee web listening on :${APP_PORT}`);
   });
+  scheduleUnverifiedAccountCleanupJob();
 
   const shutdown = async () => {
+    stopUnverifiedAccountCleanupJob();
     server.close(async () => {
       try {
         if (pool) {
@@ -975,6 +1079,20 @@ function requireAuth(req, res, next) {
   next();
 }
 
+function requireVerifiedEmail(req, res, next) {
+  if (!req.authUser) {
+    res.status(401).json({ error: "Please sign in." });
+    return;
+  }
+
+  if (!req.authUser.emailVerified) {
+    res.status(403).json({ error: "Please verify your email before using duee." });
+    return;
+  }
+
+  next();
+}
+
 async function initializeDatabase() {
   const adminPool = mysql.createPool({
     host: DB_HOST,
@@ -1151,6 +1269,12 @@ async function ensureSchema() {
     "CREATE INDEX idx_audit_logs_action_created_at ON audit_logs (action, created_at)"
   );
 
+  await ensureIndex(
+    "audit_logs",
+    "idx_audit_logs_user_action_created_at",
+    "CREATE INDEX idx_audit_logs_user_action_created_at ON audit_logs (user_id, action, created_at)"
+  );
+
   await clearExpiredSessions();
   await clearExpiredAuthTokens();
 }
@@ -1220,8 +1344,15 @@ async function createSessionForUser(userId, res) {
   setCsrfCookie(res, createCsrfToken());
 }
 
-async function issueEmailVerificationEmail({ userId, toEmail, displayName, req }) {
+async function issueEmailVerificationEmail({
+  userId,
+  toEmail,
+  displayName,
+  req,
+  includeWelcome = false,
+}) {
   assertAuthEmailDeliveryConfigured();
+  assertPublicAppOriginConfigured(req);
   await clearExpiredAuthTokens();
 
   const token = createOneTimeToken();
@@ -1246,6 +1377,7 @@ async function issueEmailVerificationEmail({ userId, toEmail, displayName, req }
     toEmail,
     displayName,
     verificationUrl,
+    includeWelcome,
   });
 
   return {
@@ -1349,6 +1481,7 @@ async function consumeEmailVerificationToken(token) {
 
 async function issuePasswordResetEmail({ userId, toEmail, displayName, req }) {
   assertAuthEmailDeliveryConfigured();
+  assertPublicAppOriginConfigured(req);
   await clearExpiredAuthTokens();
 
   const token = createOneTimeToken();
@@ -1471,6 +1604,290 @@ async function clearExpiredAuthTokens() {
   await pool.query(
     "DELETE FROM password_reset_tokens WHERE expires_at <= CURRENT_TIMESTAMP(3) OR consumed_at IS NOT NULL"
   );
+}
+
+async function deleteUserAccountData(userId) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query("DELETE FROM tasks WHERE user_id = ?", [userId]);
+    await connection.query("DELETE FROM user_preferences WHERE user_id = ?", [userId]);
+    await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
+    await connection.query("DELETE FROM email_verification_tokens WHERE user_id = ?", [userId]);
+    await connection.query("DELETE FROM password_reset_tokens WHERE user_id = ?", [userId]);
+    await connection.query("DELETE FROM audit_logs WHERE user_id = ?", [userId]);
+    const [deleteResult] = await connection.query("DELETE FROM users WHERE id = ?", [userId]);
+    await connection.commit();
+
+    return {
+      deletedUser: Number(deleteResult?.affectedRows ?? 0) > 0,
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function isReminderDeliveryConfigured() {
+  if (!RESEND_AUTH_EMAILS) {
+    return false;
+  }
+  if (!resend || !RESEND_FROM_EMAIL) {
+    return false;
+  }
+  return Boolean(resolveAppOrigin(null));
+}
+
+function normalizeNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+async function sendUnverifiedAccountReminderEmails() {
+  if (UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE <= 0) {
+    return { eligible: 0, sent: 0, failed: 0, skipped: true };
+  }
+
+  if (!isReminderDeliveryConfigured()) {
+    console.warn(
+      "Skipping unverified-account reminder emails because auth email delivery or app origin is not configured."
+    );
+    return { eligible: 0, sent: 0, failed: 0, skipped: true };
+  }
+
+  const reminderWindowStartDays = UNVERIFIED_ACCOUNT_RETENTION_DAYS - UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE;
+  let eligible = 0;
+  let sent = 0;
+  let failed = 0;
+
+  while (true) {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        u.id,
+        u.email,
+        u.display_name,
+        u.created_at,
+        TIMESTAMPDIFF(DAY, u.created_at, CURRENT_TIMESTAMP(3)) AS account_age_days
+      FROM users u
+      WHERE u.email_verified_at IS NULL
+        AND u.created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? DAY)
+        AND u.created_at > DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? DAY)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM audit_logs al
+          WHERE al.user_id = u.id
+            AND al.action = 'email_verification_reminder_sent'
+          LIMIT 1
+        )
+      ORDER BY u.created_at ASC
+      LIMIT ?
+      `,
+      [reminderWindowStartDays, UNVERIFIED_ACCOUNT_RETENTION_DAYS, UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE]
+    );
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    eligible += rows.length;
+
+    for (const row of rows) {
+      try {
+        const verification = await issueEmailVerificationEmail({
+          userId: row.id,
+          toEmail: row.email,
+          displayName: row.display_name,
+          req: null,
+          includeWelcome: false,
+        });
+
+        await logAuditEvent({
+          userId: row.id,
+          action: "email_verification_reminder_sent",
+          req: null,
+          details: {
+            source: "unverified_account_cleanup",
+            expiresAt: verification.expiresAt,
+            accountAgeDays: normalizeNumber(row.account_age_days),
+            retentionDays: UNVERIFIED_ACCOUNT_RETENTION_DAYS,
+            reminderDaysBeforeDelete: UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE,
+          },
+        });
+        sent += 1;
+      } catch (error) {
+        failed += 1;
+        console.error(`Failed to send verification reminder email for user ${row.id}:`, error);
+        try {
+          await logAuditEvent({
+            userId: row.id,
+            action: "email_verification_reminder_failed",
+            req: null,
+            details: {
+              source: "unverified_account_cleanup",
+              reason: truncateText(error?.message || String(error), 240),
+            },
+          });
+        } catch (auditError) {
+          console.error(`Failed to audit reminder email failure for user ${row.id}:`, auditError);
+        }
+      }
+    }
+  }
+
+  return { eligible, sent, failed, skipped: false };
+}
+
+async function deleteExpiredUnverifiedAccounts() {
+  let deleted = 0;
+  let failed = 0;
+  let scanned = 0;
+  let batches = 0;
+
+  while (true) {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        email,
+        created_at,
+        TIMESTAMPDIFF(DAY, created_at, CURRENT_TIMESTAMP(3)) AS account_age_days
+      FROM users
+      WHERE email_verified_at IS NULL
+        AND created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ? DAY)
+      ORDER BY created_at ASC
+      LIMIT ?
+      `,
+      [UNVERIFIED_ACCOUNT_RETENTION_DAYS, UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE]
+    );
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    batches += 1;
+    scanned += rows.length;
+
+    for (const row of rows) {
+      try {
+        const result = await deleteUserAccountData(row.id);
+        if (!result.deletedUser) {
+          continue;
+        }
+
+        deleted += 1;
+        await logAuditEvent({
+          userId: null,
+          action: "unverified_account_deleted",
+          req: null,
+          details: {
+            deletedUserId: row.id,
+            accountAgeDays: normalizeNumber(row.account_age_days),
+            retentionDays: UNVERIFIED_ACCOUNT_RETENTION_DAYS,
+          },
+        });
+      } catch (error) {
+        failed += 1;
+        console.error(`Failed to delete expired unverified account ${row.id}:`, error);
+      }
+    }
+  }
+
+  return { deleted, failed, scanned, batches };
+}
+
+async function runUnverifiedAccountCleanupCycle(source = "interval") {
+  if (unverifiedAccountCleanupInFlight || !pool) {
+    return;
+  }
+  unverifiedAccountCleanupInFlight = true;
+
+  let connection = null;
+  let lockAcquired = false;
+  const startedAt = Date.now();
+
+  try {
+    connection = await pool.getConnection();
+    const [rows] = await connection.query(
+      "SELECT GET_LOCK(?, 0) AS acquired",
+      [UNVERIFIED_ACCOUNT_CLEANUP_LOCK_NAME]
+    );
+    lockAcquired = Number(rows?.[0]?.acquired ?? 0) === 1;
+    if (!lockAcquired) {
+      return;
+    }
+
+    const reminderStats = await sendUnverifiedAccountReminderEmails();
+    const deleteStats = await deleteExpiredUnverifiedAccounts();
+    const durationMs = Date.now() - startedAt;
+
+    if (
+      source === "startup"
+      || reminderStats.sent > 0
+      || reminderStats.failed > 0
+      || deleteStats.deleted > 0
+      || deleteStats.failed > 0
+    ) {
+      console.log(
+        "Unverified-account cleanup cycle completed:",
+        {
+          source,
+          durationMs,
+          reminder: reminderStats,
+          deletion: deleteStats,
+        }
+      );
+    }
+  } catch (error) {
+    console.error("Unverified-account cleanup cycle failed:", error);
+  } finally {
+    if (connection) {
+      if (lockAcquired) {
+        try {
+          await connection.query("DO RELEASE_LOCK(?)", [UNVERIFIED_ACCOUNT_CLEANUP_LOCK_NAME]);
+        } catch (error) {
+          console.error("Failed to release unverified-account cleanup lock:", error);
+        }
+      }
+      connection.release();
+    }
+    unverifiedAccountCleanupInFlight = false;
+  }
+}
+
+function scheduleUnverifiedAccountCleanupJob() {
+  if (DEBUG_LOCAL_STORAGE) {
+    return;
+  }
+  if (unverifiedAccountCleanupTimer || !pool) {
+    return;
+  }
+
+  unverifiedAccountCleanupTimer = setInterval(() => {
+    runUnverifiedAccountCleanupCycle("interval").catch((error) => {
+      console.error("Failed to run scheduled unverified-account cleanup cycle:", error);
+    });
+  }, UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_MS);
+  unverifiedAccountCleanupTimer.unref?.();
+
+  console.log(
+    `Scheduled unverified-account cleanup every ${UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS} hour(s) `
+    + `(retention: ${UNVERIFIED_ACCOUNT_RETENTION_DAYS} days, reminder: ${UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE} day(s) before deletion).`
+  );
+
+  runUnverifiedAccountCleanupCycle("startup").catch((error) => {
+    console.error("Failed to run startup unverified-account cleanup cycle:", error);
+  });
+}
+
+function stopUnverifiedAccountCleanupJob() {
+  if (!unverifiedAccountCleanupTimer) {
+    return;
+  }
+  clearInterval(unverifiedAccountCleanupTimer);
+  unverifiedAccountCleanupTimer = null;
 }
 
 async function touchSessionLastSeen(sessionId) {
@@ -2030,6 +2447,13 @@ function resolveAppOrigin(req) {
   return `${protocol}://${host}`;
 }
 
+function assertPublicAppOriginConfigured(req) {
+  const origin = resolveAppOrigin(req);
+  if (!origin) {
+    throw serviceUnavailable("Public app origin is not configured.");
+  }
+}
+
 function buildAuthActionUrl(req, queryKey, token) {
   const origin = resolveAppOrigin(req);
   if (!origin) {
@@ -2066,49 +2490,30 @@ function assertAuthEmailDeliveryConfigured() {
   }
 }
 
-async function sendWelcomeEmail({ toEmail, displayName }) {
-  if (!resend || !RESEND_FROM_EMAIL) {
-    return;
-  }
-
-  const safeName = escapeHtml(displayName || toEmail);
-
-  const { error } = await resend.emails.send({
-    from: RESEND_FROM_EMAIL,
-    to: [toEmail],
-    subject: "Welcome to duee",
-    html: [
-      `<p>Hi ${safeName},</p>`,
-      "<p>Your duee account is ready.</p>",
-      "<p>You can now sign in on any device and your tasks will stay in sync.</p>",
-      "<p>- duee</p>",
-    ].join(""),
-    text: [
-      `Hi ${displayName || toEmail},`,
-      "",
-      "Your duee account is ready.",
-      "You can now sign in on any device and your tasks will stay in sync.",
-      "",
-      "- duee",
-    ].join("\n"),
-  });
-
-  if (error) {
-    throw new Error(error.message || "Unknown Resend API error.");
-  }
-}
-
-async function sendEmailVerificationEmail({ toEmail, displayName, verificationUrl }) {
+async function sendEmailVerificationEmail({
+  toEmail,
+  displayName,
+  verificationUrl,
+  includeWelcome = false,
+}) {
   assertAuthEmailDeliveryConfigured();
   const safeName = escapeHtml(displayName || toEmail);
   const safeUrl = escapeHtml(verificationUrl);
 
+  const introHtml = includeWelcome
+    ? "<p>Welcome to duee. Your account is almost ready.</p>"
+    : "<p>Please verify your email address to finish setting up your account.</p>";
+  const introText = includeWelcome
+    ? "Welcome to duee. Your account is almost ready."
+    : "Please verify your email address to finish setting up your account.";
+
   const { error } = await resend.emails.send({
     from: RESEND_FROM_EMAIL,
     to: [toEmail],
-    subject: "Verify your duee email",
+    subject: includeWelcome ? "Welcome to duee - verify your email" : "Verify your duee email",
     html: [
       `<p>Hi ${safeName},</p>`,
+      introHtml,
       "<p>Tap the link below to verify your email address:</p>",
       `<p><a href="${safeUrl}">Verify email</a></p>`,
       "<p>If you didn't create this account, you can ignore this email.</p>",
@@ -2116,6 +2521,8 @@ async function sendEmailVerificationEmail({ toEmail, displayName, verificationUr
     ].join(""),
     text: [
       `Hi ${displayName || toEmail},`,
+      "",
+      introText,
       "",
       "Open this link to verify your email address:",
       verificationUrl,
@@ -2181,6 +2588,12 @@ function badRequest(message) {
 function unauthorized(message) {
   const error = new Error(message);
   error.statusCode = 401;
+  return error;
+}
+
+function forbidden(message) {
+  const error = new Error(message);
+  error.statusCode = 403;
   return error;
 }
 

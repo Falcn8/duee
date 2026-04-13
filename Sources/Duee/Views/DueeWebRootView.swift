@@ -2,6 +2,7 @@ import SwiftUI
 
 #if os(macOS)
 import AppKit
+import UniformTypeIdentifiers
 
 struct DueeWebRootView: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -27,6 +28,8 @@ struct DueeWebRootView: View {
     @State private var isCollapsed = false
     @State private var expandedWindowHeight: CGFloat = 470
     @State private var collapseAnchorBottomY: CGFloat?
+    @State private var developerToolsOpen = false
+    @State private var developerReplaceImport = false
     @Namespace private var rowAnimation
 
     private var effectiveCollapsed: Bool {
@@ -102,7 +105,13 @@ struct DueeWebRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if !store.isSignedIn {
+        if store.showVerifySentPage {
+            DueeWebVerifyEmailCard(store: store)
+
+            if !store.statusMessage.isEmpty {
+                DueeWebStatusBanner(message: store.statusMessage, kind: store.statusKind)
+            }
+        } else if !store.isSignedIn {
             DueeWebAuthCard(store: store)
 
             if !store.statusMessage.isEmpty {
@@ -135,6 +144,8 @@ struct DueeWebRootView: View {
                         if !minimalMode && !completedTasks.isEmpty {
                             doneSection
                         }
+
+                        developerToolsSection
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
@@ -156,7 +167,7 @@ struct DueeWebRootView: View {
     private var completedTasks: [DueeTask] {
         tasks
             .filter(\.isCompleted)
-            .sorted(by: dueDateAscending)
+            .sorted(by: completionNewestFirst)
     }
 
     private func dueDateAscending(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
@@ -172,6 +183,15 @@ struct DueeWebRootView: View {
             return lhs.createdAt < rhs.createdAt
         }
         return lhs.dueDate < rhs.dueDate
+    }
+
+    private func completionNewestFirst(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
+        let lhsTime = lhs.completedAt ?? lhs.createdAt
+        let rhsTime = rhs.completedAt ?? rhs.createdAt
+        if lhsTime != rhsTime {
+            return lhsTime > rhsTime
+        }
+        return dueDateAscending(lhs, rhs)
     }
 
     private var appearanceModeBinding: Binding<DueeAppearanceMode> {
@@ -209,6 +229,10 @@ struct DueeWebRootView: View {
     private var collapsedSummaryText: String {
         if !store.isSignedIn {
             return "sign in to sync"
+        }
+
+        if store.showVerifySentPage {
+            return "verify your email"
         }
 
         let calendar = Calendar.current
@@ -268,7 +292,7 @@ struct DueeWebRootView: View {
 
                 Spacer(minLength: 8)
 
-                if store.isSignedIn {
+                if store.isSignedIn && !store.showVerifySentPage {
                     headerCircleButton(
                         systemImage: "arrow.clockwise",
                         accessibilityText: "Refresh tasks"
@@ -364,6 +388,87 @@ struct DueeWebRootView: View {
         }
     }
 
+    private var developerToolsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Developer")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Import/export tasks and run sync utilities.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(developerToolsOpen ? "Hide tools" : "Show tools") {
+                    developerToolsOpen.toggle()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isMutating)
+            }
+
+            if developerToolsOpen {
+                Toggle("Replace existing tasks on import", isOn: $developerReplaceImport)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(store.isMutating)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    Button("Import todo list JSON...") {
+                        importTodoListForDeveloper()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.isMutating)
+
+                    Button("Export todo list") {
+                        exportTodoListForDeveloper()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.isMutating)
+
+                    Button("Clear completed tasks") {
+                        Task {
+                            await store.clearCompletedTasksForDeveloper()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.isMutating)
+
+                    Button("Force sync") {
+                        Task {
+                            await store.forceSyncForDeveloper()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.isMutating)
+
+                    Button("Export debug snapshot") {
+                        exportDebugSnapshotForDeveloper()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.isMutating)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.secondary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.secondary.opacity(0.18), lineWidth: 0.5)
+        )
+    }
+
     private func createTask() {
         clearInputFocus()
         let cleaned = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -412,6 +517,83 @@ struct DueeWebRootView: View {
         Task {
             await store.deleteTask(taskID: task.id)
         }
+    }
+
+    private func exportTodoListForDeveloper() {
+        clearInputFocus()
+        do {
+            let data = try store.exportTodoListForDeveloperData()
+            saveJSONData(data, suggestedFilename: developerFilename(prefix: "duee-todo-export"))
+        } catch {
+            presentDeveloperFileError(error.localizedDescription)
+        }
+    }
+
+    private func exportDebugSnapshotForDeveloper() {
+        clearInputFocus()
+        do {
+            let data = try store.exportDebugSnapshotForDeveloperData()
+            saveJSONData(data, suggestedFilename: developerFilename(prefix: "duee-debug-snapshot"))
+        } catch {
+            presentDeveloperFileError(error.localizedDescription)
+        }
+    }
+
+    private func importTodoListForDeveloper() {
+        clearInputFocus()
+
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            Task {
+                await store.importTodoListForDeveloper(data: data, replace: developerReplaceImport)
+            }
+        } catch {
+            presentDeveloperFileError("Could not read the selected JSON file.")
+        }
+    }
+
+    private func saveJSONData(_ data: Data, suggestedFilename: String) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = suggestedFilename
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            presentDeveloperFileError("Could not write the JSON file to disk.")
+        }
+    }
+
+    private func presentDeveloperFileError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Developer tools"
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    private func developerFilename(prefix: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestamp = formatter.string(from: .now).replacingOccurrences(of: ":", with: "-")
+        return "\(prefix)-\(timestamp).json"
     }
 
     private func clearInputFocus() {
@@ -515,6 +697,163 @@ struct DueeWebRootView: View {
 #endif
 }
 
+private struct DueeWebVerifyEmailCard: View {
+    @ObservedObject var store: DueeWebStore
+    @State private var isDeleteFormVisible = false
+    @State private var deleteConfirmation = ""
+    @State private var deletePassword = ""
+
+    private var signedInUnverified: Bool {
+        store.isSignedInAndUnverified
+    }
+
+    private var pageTitle: String {
+        signedInUnverified ? "Verify your email to continue" : "Check your email"
+    }
+
+    private var messageText: String {
+        let email = store.verifyPageEmail
+
+        if !store.postRegisterVerificationEmailSent {
+            if !email.isEmpty {
+                return "Your account for \(email) was created, but verification email delivery failed. Resend it below to continue."
+            }
+            return "Your account was created, but verification email delivery failed. Resend verification below to continue."
+        }
+
+        if signedInUnverified {
+            if !email.isEmpty {
+                return "You are signed in as \(email). Verify your email address before you can use duee."
+            }
+            return "You are signed in, but your email is not verified. Verify your email before you can use duee."
+        }
+
+        if !email.isEmpty {
+            return "A verification link has been sent to \(email). Verify your email, then sign in to start using duee."
+        }
+        return "A verification link has been sent. Verify your email, then sign in to start using duee."
+    }
+
+    private var canDeleteAccount: Bool {
+        signedInUnverified
+            && deleteConfirmation == "DELETE"
+            && !deletePassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !store.isMutating
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("One more step")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            Text(pageTitle)
+                .font(.system(size: 16, weight: .semibold))
+
+            Text(messageText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.secondary.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(.secondary.opacity(0.18), lineWidth: 0.5)
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("1. Open the verification email from duee.")
+                Text("2. Use the verification link in that email.")
+                Text("3. Come back and continue in duee.")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Button {
+                    Task {
+                        await store.resendVerificationFromVerifyPage()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if store.isMutating {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Resend verification email")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(store.isMutating)
+
+                if !signedInUnverified {
+                    Button("Back to sign in") {
+                        store.dismissVerificationPromptToSignIn()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.isMutating)
+                }
+
+                if signedInUnverified {
+                    Button(isDeleteFormVisible ? "Cancel delete account" : "Delete account") {
+                        isDeleteFormVisible.toggle()
+                        if !isDeleteFormVisible {
+                            deleteConfirmation = ""
+                            deletePassword = ""
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .disabled(store.isMutating)
+                }
+            }
+
+            if signedInUnverified && isDeleteFormVisible {
+                VStack(alignment: .leading, spacing: 7) {
+                    TextField("Type DELETE to confirm", text: $deleteConfirmation)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(store.isMutating)
+
+                    SecureField("Current password", text: $deletePassword)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(store.isMutating)
+
+                    Button("Delete account permanently") {
+                        Task {
+                            await store.deleteAccount(password: deletePassword)
+                            if !store.isSignedIn {
+                                isDeleteFormVisible = false
+                                deleteConfirmation = ""
+                                deletePassword = ""
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .disabled(!canDeleteAccount)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.secondary.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.secondary.opacity(0.18), lineWidth: 0.5)
+        )
+    }
+}
+
 private struct DueeWebAuthCard: View {
     @ObservedObject var store: DueeWebStore
 
@@ -525,7 +864,7 @@ private struct DueeWebAuthCard: View {
 
             Text(store.authMode == .signIn
                  ? "Connect this macOS app to your duee web account."
-                 : "Create a duee web account to sync tasks.")
+                 : "Create a duee web account, then verify your email before signing in.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

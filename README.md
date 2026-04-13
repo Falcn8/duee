@@ -82,7 +82,11 @@ If CloudKit is not enabled, `duee` falls back to local-only storage on that devi
 - email verification and password reset flows (token links via email)
 - CSRF protection for cookie-auth mutating requests
 - auth/task mutation rate limiting and login brute-force throttling
-- welcome account emails via Resend
+- combined welcome + email verification emails via Resend (single email on signup)
+- password reset emails via Resend
+- email verification required before first sign-in/task access
+- daily cleanup of stale unverified accounts (configurable retention window)
+- optional reminder email before unverified account deletion
 - self-serve account data export (`JSON`) and account deletion
 - per-user task isolation (each account gets its own synced task list)
 - mobile-friendly PWA frontend (`index.html`, `app.js`, `app.css`)
@@ -107,10 +111,14 @@ cp /opt/apps/duee/.env.example /opt/stacks/apps/duee/.env
    - optional: `PUBLIC_APP_ORIGIN=https://your.domain` (used for email action links)
    - `RESEND_API_KEY=<resend-api-key>`
    - `RESEND_FROM_EMAIL=<sender@hexagon.one>` (must be on your verified Resend domain)
-   - optional: `RESEND_WELCOME_EMAILS=1` (`0` disables welcome emails)
+   - optional: `RESEND_WELCOME_EMAILS=1` (`0` removes welcome copy from the verification email)
    - optional: `RESEND_AUTH_EMAILS=1` (`0` disables verification/reset emails)
    - optional: `EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=1440`
    - optional: `PASSWORD_RESET_TOKEN_TTL_MINUTES=60`
+   - optional: `UNVERIFIED_ACCOUNT_RETENTION_DAYS=30` (delete unverified accounts older than this)
+   - optional: `UNVERIFIED_ACCOUNT_REMINDER_DAYS_BEFORE_DELETE=7` (`0` disables reminder email)
+   - optional: `UNVERIFIED_ACCOUNT_CLEANUP_INTERVAL_HOURS=24`
+   - optional: `UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE=250`
    - `DB_HOST=mysql-mysql-1` (or your MySQL container DNS name)
    - `DB_USER`, `DB_PASSWORD`
    - optional: `DB_NAME` (default `duee`)

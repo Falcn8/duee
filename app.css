@@ -499,12 +499,112 @@ h1 {
 
 .auth-forgot-row {
   margin-top: -0.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
 }
 
 .auth-forgot-row .text-button {
   min-height: auto;
   padding: 0.08rem 0.1rem;
   font-size: 0.8rem;
+}
+
+.auth-verify-sent-page {
+  gap: 0.72rem;
+}
+
+.auth-verify-sent-head {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.auth-verify-sent-kicker {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+#authVerifySentTitle {
+  font-size: 1.14rem;
+}
+
+#authVerifySentMessage {
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent 28%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-strong) 65%, var(--control) 35%);
+  padding: 0.56rem 0.62rem;
+  color: var(--ink);
+}
+
+.auth-verify-sent-steps {
+  margin: 0;
+  padding-left: 1.12rem;
+  display: grid;
+  gap: 0.2rem;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.auth-verify-sent-steps li::marker {
+  color: var(--muted-icon);
+}
+
+.auth-verify-sent-actions {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.auth-verify-sent-secondary {
+  width: 100%;
+  font-size: 0.8rem;
+  font-weight: 620;
+}
+
+.auth-verify-sent-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line) 64%);
+}
+
+.developer-toggle {
+  justify-self: flex-start;
+  min-height: 2.35rem;
+  font-size: 0.8rem;
+}
+
+.developer-panel {
+  margin-top: 0.35rem;
+  display: grid;
+  gap: 0.6rem;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent 28%);
+  padding-top: 0.6rem;
+}
+
+.developer-file-field {
+  display: grid;
+  gap: 0.24rem;
+}
+
+#developerImportFileInput {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--control);
+  color: var(--ink-soft);
+  min-height: 2.75rem;
+  padding: 0.44rem 0.6rem;
+}
+
+.developer-list {
+  display: grid;
+  gap: 0;
+}
+
+.developer-list .profile-data-action + .profile-data-action {
+  border-top: 1px solid color-mix(in srgb, var(--line) 74%, transparent 26%);
 }
 
 .auth-status {
@@ -945,12 +1045,13 @@ h2 {
   gap: 0.58rem;
   cursor: pointer;
   touch-action: manipulation;
-  transition: border-color 120ms ease, background-color 120ms ease;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 160ms ease, box-shadow 160ms ease;
 }
 
 .task-card:hover,
 .task-card:focus-within {
   border-color: var(--line-strong);
+  transform: translateY(-1px);
 }
 
 .task-card.due-today:not(.done) {
@@ -1000,6 +1101,10 @@ h2 {
   color: var(--ink-soft);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+}
+
+.task-card.task-card--just-done {
+  animation: task-complete-pop 220ms ease-out;
 }
 
 .task-meta {
@@ -1245,6 +1350,7 @@ h2 {
   padding: 0.72rem;
   display: grid;
   gap: 0.55rem;
+  animation: dialog-pop-in 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .calendar-header {
@@ -1354,6 +1460,11 @@ h2 {
 
 .edit-dialog::backdrop {
   background: var(--overlay);
+  animation: dialog-fade-in 170ms ease-out;
+}
+
+.edit-dialog[open] {
+  animation: dialog-pop-in 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .edit-form {
@@ -1412,6 +1523,41 @@ h2 {
   font-size: 0.8rem;
   font-weight: 620;
   line-height: 1.2;
+}
+
+@keyframes task-complete-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(0.985);
+  }
+  70% {
+    transform: scale(1.016);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes dialog-pop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dialog-fade-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 button:focus-visible,

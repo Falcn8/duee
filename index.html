@@ -78,6 +78,36 @@
       </p>
     </section>
 
+    <section id="authVerifySentPage" class="auth-panel auth-verify-sent-page" aria-label="Verification email sent" hidden>
+      <div class="auth-verify-sent-head">
+        <p class="auth-verify-sent-kicker">One more step</p>
+        <h2 id="authVerifySentTitle">Check your email</h2>
+      </div>
+      <p id="authVerifySentMessage" class="auth-hint"></p>
+      <ol class="auth-verify-sent-steps">
+        <li>Open the verification email from duee.</li>
+        <li>Use the verification link in that email.</li>
+        <li>Come back and continue in duee.</li>
+      </ol>
+      <p
+        id="authVerifySentStatus"
+        class="auth-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        hidden
+      ></p>
+      <div class="auth-verify-sent-actions">
+        <button id="authVerifySentResendButton" class="add auth-submit" type="button">Resend verification email</button>
+        <button id="authVerifySentDeleteButton" class="ghost auth-verify-sent-secondary auth-verify-sent-danger" type="button" hidden>
+          Delete account
+        </button>
+        <button id="authVerifySentSignInButton" class="ghost auth-verify-sent-secondary" type="button">
+          Back to sign in
+        </button>
+      </div>
+    </section>
+
     <button id="profileBackButton" class="profile-back-link text-button" type="button" hidden>
       ← Back to tasks
     </button>
@@ -190,6 +220,60 @@
         <p class="pref-hint profile-danger-hint">
           Deleting your account removes your profile, tasks, sessions, preferences, and related records.
         </p>
+      </section>
+
+      <section class="settings-card" aria-label="Developer tools">
+        <header class="settings-head">
+          <h3>Developer</h3>
+          <p class="auth-hint">Advanced tools for imports, exports, sync, and debugging.</p>
+        </header>
+        <button
+          id="developerToggleButton"
+          class="ghost developer-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="developerPanel"
+        >
+          Show developer tools
+        </button>
+        <div id="developerPanel" class="developer-panel" hidden>
+          <label class="pref-row" for="developerReplaceImportToggle">
+            <span class="pref-copy">
+              <span class="pref-title">Replace tasks on import</span>
+              <span class="pref-hint">If off, imported tasks are merged into existing tasks.</span>
+            </span>
+            <input id="developerReplaceImportToggle" class="pref-switch" type="checkbox" role="switch" />
+          </label>
+          <label class="field developer-file-field">
+            <span class="field-label auth-field-label">Import file (.json)</span>
+            <input id="developerImportFileInput" type="file" accept="application/json,.json" />
+          </label>
+          <div class="settings-list developer-list">
+            <button id="developerImportButton" class="ghost profile-data-action" type="button">
+              Import todo list
+            </button>
+            <button id="developerExportTasksButton" class="ghost profile-data-action" type="button">
+              Export todo list (JSON)
+            </button>
+            <button id="developerClearCompletedButton" class="ghost profile-data-action" type="button">
+              Clear completed tasks
+            </button>
+            <button id="developerForceSyncButton" class="ghost profile-data-action" type="button">
+              Force sync now
+            </button>
+            <button id="developerExportSnapshotButton" class="ghost profile-data-action" type="button">
+              Export debug snapshot
+            </button>
+          </div>
+          <p
+            id="developerStatus"
+            class="auth-status profile-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          ></p>
+        </div>
       </section>
     </section>
 

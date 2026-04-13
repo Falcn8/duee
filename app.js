@@ -17,6 +17,9 @@ const state = {
   authMode: loadAuthMode(),
   sessionUser: null,
   currentView: "tasks",
+  showVerifySentPage: false,
+  postRegisterEmail: "",
+  postRegisterVerificationEmailSent: true,
   authRequestInFlight: false,
   profileRequestInFlight: false,
   prefsSyncInFlight: false,
@@ -39,6 +42,8 @@ const state = {
   pendingTaskDeleteResolver: null,
   pendingDeleteAccountResolver: null,
   pendingResetPasswordToken: "",
+  developerToolsOpen: false,
+  recentlyCompletedTaskIds: new Set(),
   autoSyncTimerId: null,
   autoSyncInFlight: false,
   lastAutoSyncAt: 0,
@@ -88,6 +93,13 @@ const refs = {
   authSwitchPrefix: document.getElementById("authSwitchPrefix"),
   authSwitchButton: document.getElementById("authSwitchButton"),
   authStatus: document.getElementById("authStatus"),
+  authVerifySentPage: document.getElementById("authVerifySentPage"),
+  authVerifySentTitle: document.getElementById("authVerifySentTitle"),
+  authVerifySentMessage: document.getElementById("authVerifySentMessage"),
+  authVerifySentStatus: document.getElementById("authVerifySentStatus"),
+  authVerifySentSignInButton: document.getElementById("authVerifySentSignInButton"),
+  authVerifySentResendButton: document.getElementById("authVerifySentResendButton"),
+  authVerifySentDeleteButton: document.getElementById("authVerifySentDeleteButton"),
   profilePage: document.getElementById("profilePage"),
   profileForm: document.getElementById("profileForm"),
   profileDisplayNameValue: document.getElementById("profileDisplayNameValue"),
@@ -110,6 +122,16 @@ const refs = {
   profileDeleteDataButton: document.getElementById("profileDeleteDataButton"),
   profileBackButton: document.getElementById("profileBackButton"),
   profileSaveButton: document.getElementById("profileSaveButton"),
+  developerToggleButton: document.getElementById("developerToggleButton"),
+  developerPanel: document.getElementById("developerPanel"),
+  developerReplaceImportToggle: document.getElementById("developerReplaceImportToggle"),
+  developerImportFileInput: document.getElementById("developerImportFileInput"),
+  developerImportButton: document.getElementById("developerImportButton"),
+  developerExportTasksButton: document.getElementById("developerExportTasksButton"),
+  developerClearCompletedButton: document.getElementById("developerClearCompletedButton"),
+  developerForceSyncButton: document.getElementById("developerForceSyncButton"),
+  developerExportSnapshotButton: document.getElementById("developerExportSnapshotButton"),
+  developerStatus: document.getElementById("developerStatus"),
   calendarDialog: document.getElementById("calendarDialog"),
   calendarPrev: document.getElementById("calendarPrev"),
   calendarNext: document.getElementById("calendarNext"),
@@ -460,6 +482,18 @@ async function init() {
     openForgotPasswordDialog();
   });
 
+  refs.authVerifySentSignInButton?.addEventListener("click", () => {
+    showSignInAfterVerificationPrompt();
+  });
+
+  refs.authVerifySentResendButton?.addEventListener("click", () => {
+    resendVerificationFromVerifySentPage();
+  });
+
+  refs.authVerifySentDeleteButton?.addEventListener("click", () => {
+    deleteAccountData();
+  });
+
   refs.homeButton?.addEventListener("click", () => {
     openTasksPage({ focusMainInput: true });
   });
@@ -499,6 +533,31 @@ async function init() {
 
   refs.profileResendVerificationButton?.addEventListener("click", () => {
     resendEmailVerification();
+  });
+
+  refs.developerToggleButton?.addEventListener("click", () => {
+    state.developerToolsOpen = !state.developerToolsOpen;
+    syncDeveloperToolsUI();
+  });
+
+  refs.developerExportTasksButton?.addEventListener("click", () => {
+    exportTodoListForDeveloper();
+  });
+
+  refs.developerImportButton?.addEventListener("click", () => {
+    importTodoListForDeveloper();
+  });
+
+  refs.developerClearCompletedButton?.addEventListener("click", () => {
+    clearCompletedTasksForDeveloper();
+  });
+
+  refs.developerForceSyncButton?.addEventListener("click", () => {
+    forceSyncForDeveloper();
+  });
+
+  refs.developerExportSnapshotButton?.addEventListener("click", () => {
+    exportDebugSnapshotForDeveloper();
   });
 
   refs.forgotPasswordCancel?.addEventListener("click", () => {
@@ -541,6 +600,7 @@ async function init() {
   syncDueToggleUI();
   syncAddButtonUI();
   syncProfilePreferencesUI();
+  syncDeveloperToolsUI();
   syncSideCalendarUI();
   syncTasksContentLayout();
 
@@ -573,6 +633,20 @@ async function bootstrapAuthenticatedSession() {
     }
 
     state.sessionUser = session.user;
+    if (requiresEmailVerificationGate()) {
+      state.showVerifySentPage = true;
+      state.postRegisterEmail = state.sessionUser.email || "";
+      state.postRegisterVerificationEmailSent = true;
+      state.tasks = [];
+      stopAutoSyncLoop();
+      clearStatus();
+      clearAuthStatus();
+      syncAuthUI();
+      setAuthVerifySentStatus("Verify your email before using duee.", "warn");
+      render();
+      return;
+    }
+
     ensureAutoSyncLoop();
     await refreshPrefsFromServer();
     clearAuthStatus();
@@ -629,19 +703,37 @@ async function verifyEmailTokenFromLink(token) {
   setAuthRequestInFlight(true);
   try {
     const payload = await apiVerifyEmailToken(token);
+    const verifiedEmail = payload.user?.email
+      || state.sessionUser?.email
+      || state.postRegisterEmail
+      || refs.authEmail?.value.trim()
+      || "";
+
     if (payload.user) {
       state.sessionUser = payload.user;
-      syncAuthUI();
     }
 
-    const message = payload.alreadyVerified
-      ? "Email is already verified."
-      : "Email verified successfully.";
-    if (state.currentView === "profile" && state.sessionUser) {
-      setProfileStatus(message, "info");
-    } else {
-      setAuthStatus(message, "info");
+    try {
+      await apiLogout();
+    } catch {
+      // Best effort; still continue to sign-in screen.
     }
+
+    requireSignIn();
+    state.authMode = "login";
+    saveAuthMode();
+    syncAuthModeUI();
+    if (refs.authEmail && verifiedEmail) {
+      refs.authEmail.value = verifiedEmail;
+    }
+    refs.authPassword?.focus();
+    setAuthStatus(
+      payload.alreadyVerified
+        ? "Email already verified. Sign in to continue."
+        : "Email verified. Sign in to continue.",
+      "info",
+      { persistToast: true }
+    );
   } catch (error) {
     setAuthStatus(error.message || "Could not verify your email link.", "error");
   } finally {
@@ -649,8 +741,18 @@ async function verifyEmailTokenFromLink(token) {
   }
 }
 
+function requiresEmailVerificationGate() {
+  return Boolean(
+    !state.useLocalStorageMode
+    && state.sessionUser
+    && !state.sessionUser.emailVerified
+  );
+}
+
 async function loadTasksForCurrentUser() {
-  if (!state.sessionUser) {
+  if (!state.sessionUser || requiresEmailVerificationGate()) {
+    state.tasks = [];
+    render();
     return;
   }
 
@@ -695,11 +797,48 @@ async function submitAuth() {
       ? await apiRegister(email, password, displayName)
       : await apiLogin(email, password);
 
+    if (registerMode) {
+      state.authMode = "login";
+      saveAuthMode();
+      refs.authPassword.value = "";
+      if (refs.authDisplayName) {
+        refs.authDisplayName.value = "";
+      }
+      syncAuthModeUI();
+      showVerifySentPageForEmail(payload.email, payload.verificationEmailSent);
+      return;
+    }
+
     if (!payload.user) {
-      throw new Error("Authentication response was invalid.");
+      throw new Error("Sign-in response was invalid.");
     }
 
     state.sessionUser = payload.user;
+    if (requiresEmailVerificationGate()) {
+      state.showVerifySentPage = true;
+      state.postRegisterEmail = state.sessionUser.email || email;
+      state.postRegisterVerificationEmailSent = true;
+      state.currentView = "tasks";
+      state.authMode = "login";
+      saveAuthMode();
+      if (refs.authDisplayName) {
+        refs.authDisplayName.value = "";
+      }
+      refs.authPassword.value = "";
+      stopAutoSyncLoop();
+      state.tasks = [];
+      syncAuthModeUI();
+      syncAuthUI();
+      clearStatus();
+      clearAuthStatus();
+      setAuthVerifySentStatus("Verify your email before using duee.", "warn");
+      render();
+      return;
+    }
+
+    state.showVerifySentPage = false;
+    state.postRegisterEmail = "";
+    state.postRegisterVerificationEmailSent = true;
     ensureAutoSyncLoop();
     await refreshPrefsFromServer();
     state.currentView = "tasks";
@@ -714,12 +853,6 @@ async function submitAuth() {
     syncAuthUI();
     clearStatus();
     clearAuthStatus();
-
-    if (registerMode && payload.user && !payload.user.emailVerified) {
-      setStatus("Account created. Check your email to verify your address.", "info");
-    } else if (!registerMode && payload.user && !payload.user.emailVerified) {
-      setStatus("Your email is not verified yet. You can resend verification from Profile.", "warn");
-    }
 
     await loadTasksForCurrentUser();
   } catch (error) {
@@ -750,16 +883,22 @@ function requireSignIn(message = "", type = "info") {
   stopAutoSyncLoop();
   state.sessionUser = null;
   state.currentView = "tasks";
+  state.showVerifySentPage = false;
+  state.postRegisterEmail = "";
+  state.postRegisterVerificationEmailSent = true;
   state.profileEditing = false;
   state.prefsSyncInFlight = false;
   state.prefsSyncPending = false;
   state.sideCalendarSelectedIso = null;
   state.tasks = [];
   state.pendingTaskMutationIds.clear();
+  state.recentlyCompletedTaskIds.clear();
   state.editingTaskId = null;
   setRequestInFlight(false);
   setProfileRequestInFlight(false);
   clearProfileStatus();
+  clearDeveloperStatus();
+  clearAuthVerifySentStatus();
   syncAuthUI();
   render();
 
@@ -774,6 +913,7 @@ function canRunAutoSyncNow() {
   return (
     !state.useLocalStorageMode
     && Boolean(state.sessionUser)
+    && !requiresEmailVerificationGate()
     && !state.requestInFlight
     && !state.authRequestInFlight
     && !state.profileRequestInFlight
@@ -831,7 +971,7 @@ async function triggerAutoSync(reason = "interval") {
 
 async function refreshTasks(options = {}) {
   const silent = Boolean(options.silent);
-  if (state.useLocalStorageMode || !state.sessionUser) {
+  if (state.useLocalStorageMode || !state.sessionUser || requiresEmailVerificationGate()) {
     return;
   }
 
@@ -1017,6 +1157,11 @@ async function toggleTaskCompletion(id) {
     }
     task.isCompleted = !task.isCompleted;
     task.completedAt = task.isCompleted ? new Date().toISOString() : null;
+    if (task.isCompleted) {
+      markTaskRecentlyCompleted(task.id);
+    } else {
+      state.recentlyCompletedTaskIds.delete(task.id);
+    }
     saveLocalModeTasks();
     render();
     return;
@@ -1044,6 +1189,11 @@ async function toggleTaskCompletion(id) {
 
   task.isCompleted = nextCompleted;
   task.completedAt = nextCompleted ? new Date().toISOString() : null;
+  if (nextCompleted) {
+    markTaskRecentlyCompleted(task.id);
+  } else {
+    state.recentlyCompletedTaskIds.delete(task.id);
+  }
   state.pendingTaskMutationIds.add(id);
   saveTasksCache();
   clearStatus();
@@ -1316,6 +1466,131 @@ async function submitForgotPasswordDialog() {
   }
 }
 
+function showVerifySentPageForEmail(email, verificationEmailSent = true) {
+  if (state.useLocalStorageMode) {
+    return;
+  }
+
+  const normalizedEmail = typeof email === "string" ? email.trim() : "";
+  const emailSent = verificationEmailSent !== false;
+  state.showVerifySentPage = true;
+  state.postRegisterEmail = normalizedEmail;
+  state.postRegisterVerificationEmailSent = emailSent;
+  if (refs.authEmail && normalizedEmail) {
+    refs.authEmail.value = normalizedEmail;
+  }
+  clearAuthStatus();
+  setAuthVerifySentStatus("", "info");
+  syncAuthUI();
+  if (!emailSent) {
+    setAuthVerifySentStatus(
+      "Account created, but the verification email could not be sent. Resend it now.",
+      "warn"
+    );
+    return;
+  }
+  setAuthVerifySentStatus("Verification email sent. Check your inbox to continue.", "info");
+}
+
+function showSignInAfterVerificationPrompt() {
+  if (requiresEmailVerificationGate()) {
+    return;
+  }
+
+  state.showVerifySentPage = false;
+  clearAuthVerifySentStatus();
+  syncAuthUI();
+  refs.authPassword?.focus();
+}
+
+async function resendVerificationFromVerifySentPage() {
+  if (state.useLocalStorageMode || state.authRequestInFlight) {
+    return;
+  }
+
+  const email = state.sessionUser?.email || state.postRegisterEmail || refs.authEmail?.value.trim() || "";
+  if (!email) {
+    setAuthVerifySentStatus("We need your email to resend verification.", "warn");
+    if (!requiresEmailVerificationGate()) {
+      showSignInAfterVerificationPrompt();
+      refs.authEmail?.focus();
+    }
+    return;
+  }
+
+  setAuthRequestInFlight(true);
+  state.postRegisterEmail = email;
+  clearAuthVerifySentStatus();
+  try {
+    if (requiresEmailVerificationGate()) {
+      const payload = await apiResendEmailVerification();
+      if (payload.alreadyVerified && state.sessionUser) {
+        state.sessionUser.emailVerified = true;
+        state.sessionUser.emailVerifiedAt = state.sessionUser.emailVerifiedAt || new Date().toISOString();
+        state.showVerifySentPage = false;
+        state.postRegisterEmail = "";
+        state.postRegisterVerificationEmailSent = true;
+        clearAuthVerifySentStatus();
+        syncAuthUI();
+        ensureAutoSyncLoop();
+        await refreshPrefsFromServer();
+        await loadTasksForCurrentUser();
+        setAuthStatus("Email is already verified. You can continue.", "info");
+        return;
+      }
+    } else {
+      await apiResendEmailVerificationByEmail(email);
+    }
+
+    state.postRegisterVerificationEmailSent = true;
+    syncVerifySentPageUI();
+    setAuthVerifySentStatus("Verification email sent. Check your inbox.", "info");
+  } catch (error) {
+    setAuthVerifySentStatus(error.message || "Could not resend verification email.", "error");
+  } finally {
+    setAuthRequestInFlight(false);
+  }
+}
+
+function syncVerifySentPageUI() {
+  if (!refs.authVerifySentMessage) {
+    return;
+  }
+
+  const signedInUnverified = requiresEmailVerificationGate();
+  const email = state.sessionUser?.email || state.postRegisterEmail || refs.authEmail?.value.trim() || "";
+  if (refs.authVerifySentTitle) {
+    refs.authVerifySentTitle.textContent = signedInUnverified
+      ? "Verify your email to continue"
+      : "Check your email";
+  }
+  if (refs.authVerifySentSignInButton) {
+    refs.authVerifySentSignInButton.hidden = signedInUnverified;
+  }
+  if (refs.authVerifySentDeleteButton) {
+    refs.authVerifySentDeleteButton.hidden = !signedInUnverified;
+    refs.authVerifySentDeleteButton.disabled = state.authRequestInFlight || state.profileRequestInFlight;
+  }
+
+  if (!state.postRegisterVerificationEmailSent) {
+    refs.authVerifySentMessage.textContent = email
+      ? `Your account for ${email} was created, but verification email delivery failed. Resend it below to continue.`
+      : "Your account was created, but verification email delivery failed. Resend it below to continue.";
+    return;
+  }
+
+  if (signedInUnverified) {
+    refs.authVerifySentMessage.textContent = email
+      ? `You are signed in as ${email}. Verify your email address before you can use duee.`
+      : "You are signed in, but your email is not verified. Verify your email before you can use duee.";
+    return;
+  }
+
+  refs.authVerifySentMessage.textContent = email
+    ? `A verification link has been sent to ${email}. Verify your email, then sign in to start using duee.`
+    : "A verification link has been sent. Verify your email, then sign in to start using duee.";
+}
+
 function setForgotPasswordDialogStatus(message, type = "info") {
   syncInlineStatus(refs.forgotPasswordDialogStatus, message, type, { renderInline: true });
 }
@@ -1533,7 +1808,7 @@ function render() {
 
   const doneTasks = state.tasks
     .filter((task) => task.isCompleted)
-    .sort(compareByDueDate);
+    .sort(compareDoneByCompletionNewest);
 
   refs.activeList.replaceChildren(...activeTasks.map(renderTask));
   refs.doneList.replaceChildren(...doneTasks.map(renderTask));
@@ -1563,6 +1838,7 @@ function renderTask(task) {
 
   card.dataset.id = task.id;
   card.classList.toggle("done", task.isCompleted);
+  card.classList.toggle("task-card--just-done", state.recentlyCompletedTaskIds.has(task.id));
 
   text.textContent = task.text;
   const due = dueLabel(task);
@@ -1631,6 +1907,42 @@ function compareByDueDate(lhs, rhs) {
   return new Date(lhs.createdAt).getTime() - new Date(rhs.createdAt).getTime();
 }
 
+function compareDoneByCompletionNewest(lhs, rhs) {
+  const rhsTime = completionTimestamp(rhs);
+  const lhsTime = completionTimestamp(lhs);
+  if (rhsTime !== lhsTime) {
+    return rhsTime - lhsTime;
+  }
+
+  return compareByDueDate(lhs, rhs);
+}
+
+function completionTimestamp(task) {
+  const completedAt = Date.parse(task.completedAt || "");
+  if (Number.isFinite(completedAt) && completedAt > 0) {
+    return completedAt;
+  }
+
+  const createdAt = Date.parse(task.createdAt || "");
+  if (Number.isFinite(createdAt) && createdAt > 0) {
+    return createdAt;
+  }
+
+  return 0;
+}
+
+function markTaskRecentlyCompleted(taskId) {
+  if (!taskId) {
+    return;
+  }
+
+  state.recentlyCompletedTaskIds.add(taskId);
+  window.setTimeout(() => {
+    state.recentlyCompletedTaskIds.delete(taskId);
+    render();
+  }, 260);
+}
+
 function replaceTask(updatedTask) {
   const index = state.tasks.findIndex((item) => item.id === updatedTask.id);
   if (index < 0) {
@@ -1642,12 +1954,16 @@ function replaceTask(updatedTask) {
 
 function syncAuthUI() {
   const signedIn = Boolean(state.sessionUser);
-  if (!signedIn) {
+  const requiresVerification = requiresEmailVerificationGate();
+  if (!signedIn || requiresVerification) {
     state.currentView = "tasks";
   }
 
-  const showTasks = state.useLocalStorageMode || signedIn;
-  const showProfile = !state.useLocalStorageMode && signedIn && state.currentView === "profile";
+  const showAuthGate = !state.useLocalStorageMode && !signedIn;
+  const showVerifySentPage = !state.useLocalStorageMode
+    && (requiresVerification || (!signedIn && state.showVerifySentPage));
+  const showTasks = state.useLocalStorageMode || (signedIn && !requiresVerification);
+  const showProfile = !state.useLocalStorageMode && signedIn && !requiresVerification && state.currentView === "profile";
 
   if (refs.tasksShell) {
     refs.tasksShell.hidden = !showTasks || showProfile;
@@ -1662,7 +1978,7 @@ function syncAuthUI() {
   }
 
   if (refs.accountBar) {
-    refs.accountBar.hidden = state.useLocalStorageMode || !signedIn;
+    refs.accountBar.hidden = state.useLocalStorageMode || !signedIn || showVerifySentPage;
   }
 
   if (refs.accountDisplayName) {
@@ -1671,11 +1987,24 @@ function syncAuthUI() {
 
   if (refs.accountIdentity) {
     refs.accountIdentity.title = state.sessionUser?.email || "";
-    refs.accountIdentity.setAttribute("aria-label", signedIn ? "Open profile settings" : "Open profile");
+    refs.accountIdentity.setAttribute(
+      "aria-label",
+      signedIn
+        ? (requiresVerification ? "Profile is locked until email is verified" : "Open profile settings")
+        : "Open profile"
+    );
   }
 
   if (refs.authPanel) {
-    refs.authPanel.hidden = state.useLocalStorageMode || signedIn;
+    refs.authPanel.hidden = !showAuthGate || showVerifySentPage;
+  }
+
+  if (refs.authVerifySentPage) {
+    refs.authVerifySentPage.hidden = !showVerifySentPage;
+  }
+
+  if (showVerifySentPage) {
+    syncVerifySentPageUI();
   }
 
   if (!showTasks || showProfile) {
@@ -1688,18 +2017,25 @@ function syncAuthUI() {
   populateProfileForm();
   syncProfileEditUI();
   syncProfilePreferencesUI();
+  syncDeveloperToolsUI();
   syncSideCalendarUI();
   syncAccountControlsDisabled();
   syncTasksContentLayout();
 }
 
 function openProfilePage() {
-  if (state.useLocalStorageMode || !state.sessionUser || state.authRequestInFlight) {
+  if (
+    state.useLocalStorageMode
+    || !state.sessionUser
+    || requiresEmailVerificationGate()
+    || state.authRequestInFlight
+  ) {
     return;
   }
   state.currentView = "profile";
   state.profileEditing = false;
   clearProfileStatus();
+  clearDeveloperStatus();
   populateProfileForm();
   syncProfileEditUI();
   syncAuthUI();
@@ -1817,6 +2153,7 @@ function syncProfilePreferencesUI() {
   }
 
   syncProfileVerificationUI();
+  syncDeveloperToolsUI();
 }
 
 function syncProfileVerificationUI() {
@@ -1844,6 +2181,255 @@ function syncProfileVerificationUI() {
       || state.authRequestInFlight
       || state.profileRequestInFlight;
   }
+}
+
+function syncDeveloperToolsUI() {
+  const canUseDeveloperTools = Boolean(state.sessionUser) && !state.useLocalStorageMode;
+  const busy = state.authRequestInFlight || state.profileRequestInFlight;
+  const disabled = !canUseDeveloperTools || busy;
+
+  if (refs.developerToggleButton) {
+    refs.developerToggleButton.hidden = !canUseDeveloperTools;
+    refs.developerToggleButton.disabled = busy;
+    refs.developerToggleButton.textContent = state.developerToolsOpen
+      ? "Hide developer tools"
+      : "Show developer tools";
+    refs.developerToggleButton.setAttribute("aria-expanded", String(state.developerToolsOpen));
+  }
+
+  if (refs.developerPanel) {
+    refs.developerPanel.hidden = !canUseDeveloperTools || !state.developerToolsOpen;
+  }
+
+  if (refs.developerReplaceImportToggle) {
+    refs.developerReplaceImportToggle.disabled = disabled;
+  }
+  if (refs.developerImportFileInput) {
+    refs.developerImportFileInput.disabled = disabled;
+  }
+  if (refs.developerImportButton) {
+    refs.developerImportButton.disabled = disabled;
+  }
+  if (refs.developerExportTasksButton) {
+    refs.developerExportTasksButton.disabled = disabled;
+  }
+  if (refs.developerClearCompletedButton) {
+    refs.developerClearCompletedButton.disabled = disabled;
+  }
+  if (refs.developerForceSyncButton) {
+    refs.developerForceSyncButton.disabled = disabled;
+  }
+  if (refs.developerExportSnapshotButton) {
+    refs.developerExportSnapshotButton.disabled = disabled;
+  }
+}
+
+function setDeveloperStatus(message, type = "info") {
+  syncInlineStatus(refs.developerStatus, message, type, { renderInline: true });
+  if (message) {
+    showToast("developer", message, type);
+    return;
+  }
+  clearToast("developer");
+}
+
+function clearDeveloperStatus() {
+  setDeveloperStatus("", "info");
+}
+
+function exportTodoListForDeveloper() {
+  if (!state.sessionUser || state.useLocalStorageMode || state.authRequestInFlight || state.profileRequestInFlight) {
+    return;
+  }
+
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    taskCount: state.tasks.length,
+    tasks: state.tasks.map((task) => ({
+      text: task.text,
+      hasDueDate: Boolean(task.hasDueDate),
+      dueDate: task.hasDueDate ? task.dueDate : null,
+      isCompleted: Boolean(task.isCompleted),
+      createdAt: task.createdAt || null,
+      completedAt: task.completedAt || null,
+    })),
+  };
+
+  downloadJsonFile(payload, `duee-todo-export-${new Date().toISOString().replaceAll(":", "-")}.json`);
+  setDeveloperStatus("Todo list exported.", "info");
+}
+
+async function importTodoListForDeveloper() {
+  if (!state.sessionUser || state.useLocalStorageMode || state.authRequestInFlight || state.profileRequestInFlight) {
+    return;
+  }
+
+  const importFile = refs.developerImportFileInput?.files?.[0];
+  if (!importFile) {
+    setDeveloperStatus("Choose a JSON file to import.", "warn");
+    return;
+  }
+
+  setProfileRequestInFlight(true);
+  clearDeveloperStatus();
+  try {
+    const rawText = await importFile.text();
+    const importedTasks = parseImportedTasksForDeveloper(rawText);
+    const replace = Boolean(refs.developerReplaceImportToggle?.checked);
+    await applyImportedTasksForDeveloper(importedTasks, { replace });
+    if (refs.developerImportFileInput) {
+      refs.developerImportFileInput.value = "";
+    }
+    setDeveloperStatus(
+      replace
+        ? `Imported ${importedTasks.length} tasks and replaced existing tasks.`
+        : `Imported ${importedTasks.length} tasks.`,
+      "info"
+    );
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    setDeveloperStatus(error.message || "Could not import todo list.", "error");
+  } finally {
+    setProfileRequestInFlight(false);
+  }
+}
+
+function parseImportedTasksForDeveloper(rawText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    throw new Error("Import file is not valid JSON.");
+  }
+
+  const taskCandidates = Array.isArray(parsed)
+    ? parsed
+    : (Array.isArray(parsed?.tasks) ? parsed.tasks : null);
+
+  if (!Array.isArray(taskCandidates)) {
+    throw new Error("Import file must be a JSON array or an object with a tasks array.");
+  }
+
+  const tasks = taskCandidates.map(normalizeTask).filter(Boolean);
+  if (tasks.length === 0) {
+    throw new Error("Import file does not contain any valid tasks.");
+  }
+
+  return tasks;
+}
+
+async function applyImportedTasksForDeveloper(importedTasks, { replace }) {
+  if (replace) {
+    const existingTaskIds = state.tasks.map((task) => task.id);
+    for (const taskId of existingTaskIds) {
+      await apiDeleteTask(taskId);
+    }
+    state.tasks = [];
+  }
+
+  const createdTasks = [];
+  for (const importedTask of importedTasks) {
+    const created = await apiCreateTask({
+      text: importedTask.text,
+      hasDueDate: Boolean(importedTask.hasDueDate),
+      dueDate: importedTask.hasDueDate ? normalizedDraftDate(importedTask.dueDate) : null,
+    });
+
+    if (importedTask.isCompleted) {
+      const completed = await apiUpdateTask(created.id, { isCompleted: true });
+      createdTasks.push(completed);
+    } else {
+      createdTasks.push(created);
+    }
+  }
+
+  if (replace) {
+    state.tasks = createdTasks;
+  } else {
+    state.tasks = [...state.tasks, ...createdTasks];
+  }
+
+  saveTasksCache();
+  render();
+}
+
+async function clearCompletedTasksForDeveloper() {
+  if (!state.sessionUser || state.useLocalStorageMode || state.authRequestInFlight || state.profileRequestInFlight) {
+    return;
+  }
+
+  const doneTasks = state.tasks.filter((task) => task.isCompleted);
+  if (doneTasks.length === 0) {
+    setDeveloperStatus("No completed tasks to clear.", "info");
+    return;
+  }
+
+  setProfileRequestInFlight(true);
+  clearDeveloperStatus();
+  try {
+    for (const task of doneTasks) {
+      await apiDeleteTask(task.id);
+    }
+    state.tasks = state.tasks.filter((task) => !task.isCompleted);
+    saveTasksCache();
+    render();
+    setDeveloperStatus(`Cleared ${doneTasks.length} completed tasks.`, "info");
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    setDeveloperStatus(error.message || "Could not clear completed tasks.", "error");
+  } finally {
+    setProfileRequestInFlight(false);
+  }
+}
+
+async function forceSyncForDeveloper() {
+  if (!state.sessionUser || state.useLocalStorageMode || state.authRequestInFlight || state.profileRequestInFlight) {
+    return;
+  }
+
+  setProfileRequestInFlight(true);
+  setDeveloperStatus("Syncing…", "info");
+  try {
+    const remoteTasks = await apiGetTasks();
+    state.tasks = remoteTasks;
+    saveTasksCache();
+    render();
+    setDeveloperStatus("Sync complete.", "info");
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+    setDeveloperStatus(error.message || "Could not sync tasks.", "error");
+  } finally {
+    setProfileRequestInFlight(false);
+  }
+}
+
+function exportDebugSnapshotForDeveloper() {
+  if (!state.sessionUser || state.useLocalStorageMode || state.authRequestInFlight || state.profileRequestInFlight) {
+    return;
+  }
+
+  const snapshot = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    user: state.sessionUser,
+    prefs: state.prefs,
+    tasks: state.tasks,
+    counts: {
+      total: state.tasks.length,
+      active: state.tasks.filter((task) => !task.isCompleted).length,
+      completed: state.tasks.filter((task) => task.isCompleted).length,
+    },
+  };
+
+  downloadJsonFile(snapshot, `duee-debug-snapshot-${new Date().toISOString().replaceAll(":", "-")}.json`);
+  setDeveloperStatus("Debug snapshot exported.", "info");
 }
 
 function syncPreferenceToggle(toggle, checked, disabled) {
@@ -2053,7 +2639,7 @@ function syncAuthModeUI() {
 
   refs.authTitle.textContent = registerMode ? "Create account" : "Sign in";
   refs.authHint.textContent = registerMode
-    ? "Create an account to sync your tasks across devices."
+    ? "Create an account, then verify your email before signing in."
     : "Sign in to sync your tasks across devices.";
   refs.authSubmit.textContent = registerMode ? "Create account" : "Sign in";
   refs.authSwitchPrefix.textContent = registerMode ? "Already have an account?" : "Need an account?";
@@ -2093,6 +2679,15 @@ function setAuthRequestInFlight(value) {
   }
   if (refs.authForgotPasswordButton) {
     refs.authForgotPasswordButton.disabled = value || state.authMode === "register";
+  }
+  if (refs.authVerifySentSignInButton) {
+    refs.authVerifySentSignInButton.disabled = value;
+  }
+  if (refs.authVerifySentResendButton) {
+    refs.authVerifySentResendButton.disabled = value;
+  }
+  if (refs.authVerifySentDeleteButton) {
+    refs.authVerifySentDeleteButton.disabled = value || !requiresEmailVerificationGate();
   }
   if (refs.forgotPasswordEmailInput) {
     refs.forgotPasswordEmailInput.disabled = value;
@@ -2137,6 +2732,9 @@ function setProfileRequestInFlight(value) {
   if (refs.deleteAccountConfirm) {
     refs.deleteAccountConfirm.disabled = value;
   }
+  if (refs.authVerifySentDeleteButton) {
+    refs.authVerifySentDeleteButton.disabled = value || !requiresEmailVerificationGate();
+  }
   syncAccountControlsDisabled();
   syncProfileEditUI();
   syncProfilePreferencesUI();
@@ -2148,14 +2746,18 @@ function syncAccountControlsDisabled() {
     refs.logoutButton.disabled = disabled;
   }
   if (refs.accountIdentity) {
-    refs.accountIdentity.disabled = disabled;
+    refs.accountIdentity.disabled = disabled || requiresEmailVerificationGate();
   }
 }
 
-function setAuthStatus(message, type = "info") {
+function setAuthStatus(message, type = "info", options = {}) {
   syncInlineStatus(refs.authStatus, message, type);
   if (message) {
-    showToast("auth", message, type);
+    showToast("auth", message, type, {
+      retry: Boolean(options.retry),
+      signIn: Boolean(options.signIn),
+      persist: Boolean(options.persistToast),
+    });
     return;
   }
   clearToast("auth");
@@ -2163,6 +2765,19 @@ function setAuthStatus(message, type = "info") {
 
 function clearAuthStatus() {
   setAuthStatus("", "info");
+}
+
+function setAuthVerifySentStatus(message, type = "info") {
+  syncInlineStatus(refs.authVerifySentStatus, message, type);
+  if (message) {
+    showToast("auth-verify-sent", message, type);
+    return;
+  }
+  clearToast("auth-verify-sent");
+}
+
+function clearAuthVerifySentStatus() {
+  setAuthVerifySentStatus("", "info");
 }
 
 function setProfileStatus(message, type = "info") {
@@ -2437,6 +3052,7 @@ function promptSignInFromStatus() {
     return;
   }
 
+  state.showVerifySentPage = false;
   state.authMode = "login";
   saveAuthMode();
   syncAuthModeUI();
@@ -2486,7 +3102,8 @@ function showToast(source, message, type = "info", actions = {}) {
   const normalizedType = normalizeToastType(type);
   const retryAction = Boolean(actions.retry);
   const signInAction = Boolean(actions.signIn);
-  const shouldAutoDismiss = !retryAction && !signInAction;
+  const persistent = Boolean(actions.persist);
+  const shouldAutoDismiss = !retryAction && !signInAction && !persistent;
 
   if (state.toastDismissTimeoutId) {
     clearTimeout(state.toastDismissTimeoutId);
@@ -3083,13 +3700,13 @@ function persistPrefs({ renderTasks = false } = {}) {
   if (renderTasks) {
     render();
   }
-  if (!state.useLocalStorageMode && state.sessionUser) {
+  if (!state.useLocalStorageMode && state.sessionUser && !requiresEmailVerificationGate()) {
     syncPrefsToServer();
   }
 }
 
 async function refreshPrefsFromServer() {
-  if (state.useLocalStorageMode || !state.sessionUser) {
+  if (state.useLocalStorageMode || !state.sessionUser || requiresEmailVerificationGate()) {
     return;
   }
 
@@ -3109,7 +3726,7 @@ async function refreshPrefsFromServer() {
 }
 
 async function syncPrefsToServer() {
-  if (state.useLocalStorageMode || !state.sessionUser) {
+  if (state.useLocalStorageMode || !state.sessionUser || requiresEmailVerificationGate()) {
     return;
   }
   if (state.prefsSyncInFlight) {
@@ -3190,6 +3807,12 @@ async function apiRegister(email, password, displayName) {
   });
 
   return {
+    ok: Boolean(payload.ok),
+    pendingVerification: Boolean(payload.pendingVerification),
+    email: typeof payload.email === "string" ? payload.email : email,
+    verificationEmailSent: payload.verificationEmailSent !== undefined
+      ? Boolean(payload.verificationEmailSent)
+      : true,
     user: normalizeUser(payload.user),
   };
 }
@@ -3251,6 +3874,13 @@ async function apiResendEmailVerification() {
   return {
     alreadyVerified: Boolean(payload.alreadyVerified),
   };
+}
+
+async function apiResendEmailVerificationByEmail(email) {
+  await apiRequest("/auth/email-verification/request", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
 }
 
 async function apiGetPrefs() {
@@ -3356,6 +3986,19 @@ async function apiRequest(path, options = {}) {
   }
 
   return payload;
+}
+
+function downloadJsonFile(payload, filename) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json; charset=utf-8" });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function sanitizeAuthActionToken(value) {
