@@ -8,6 +8,8 @@ import UIKit
 #endif
 
 struct DueeRootView: View {
+    private let completedTaskPageSize = 6
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dueeColorTheme) private var colorTheme
@@ -31,6 +33,8 @@ struct DueeRootView: View {
     @State private var isCollapsed = false
     @State private var expandedWindowHeight: CGFloat = 470
     @State private var collapseAnchorBottomY: CGFloat?
+    @State private var recentlyAddedTaskIDs: Set<UUID> = []
+    @State private var visibleCompletedTaskCount = 6
     @Namespace private var rowAnimation
 
     init() {
@@ -139,6 +143,14 @@ struct DueeRootView: View {
             .sorted(by: dueDateAscending)
     }
 
+    private var visibleCompletedTasks: [DueeTask] {
+        Array(completedTasks.prefix(visibleCompletedTaskCount))
+    }
+
+    private var hiddenCompletedTaskCount: Int {
+        max(completedTasks.count - visibleCompletedTasks.count, 0)
+    }
+
     private func dueDateAscending(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
         if lhs.hasDueDate != rhs.hasDueDate {
             return lhs.hasDueDate && !rhs.hasDueDate
@@ -149,7 +161,7 @@ struct DueeRootView: View {
         }
 
         if lhs.dueDate == rhs.dueDate {
-            return lhs.createdAt < rhs.createdAt
+            return lhs.createdAt > rhs.createdAt
         }
         return lhs.dueDate < rhs.dueDate
     }
@@ -296,6 +308,7 @@ struct DueeRootView: View {
                     TaskRowView(
                         task: task,
                         namespace: rowAnimation,
+                        isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                         onToggle: { toggleCompletion(for: task) },
                         onEdit: { beginEditing(task) },
                         onDelete: { deleteTask(task) }
@@ -303,7 +316,7 @@ struct DueeRootView: View {
                     .transition(
                         .asymmetric(
                             insertion: .opacity.combined(with: .move(edge: .top)),
-                            removal: .opacity
+                            removal: .opacity.combined(with: .scale(scale: 0.97))
                         )
                     )
                 }
@@ -320,15 +333,25 @@ struct DueeRootView: View {
                 .padding(.leading, 2)
                 .padding(.bottom, 2)
 
-            ForEach(completedTasks) { task in
+            ForEach(visibleCompletedTasks) { task in
                 TaskRowView(
                     task: task,
                     namespace: rowAnimation,
+                    isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                     onToggle: { toggleCompletion(for: task) },
                     onEdit: { beginEditing(task) },
                     onDelete: { deleteTask(task) }
                 )
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+
+            if hiddenCompletedTaskCount > 0 {
+                Button("Show \(min(hiddenCompletedTaskCount, completedTaskPageSize)) more") {
+                    visibleCompletedTaskCount += completedTaskPageSize
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 4)
             }
         }
     }
@@ -338,16 +361,27 @@ struct DueeRootView: View {
         let cleaned = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
 
+        let item = DueeTask(
+            dueDate: draftHasDueDate ? draftDueDate : nil,
+            text: cleaned
+        )
+
         withAnimation(.snappy(duration: 0.22, extraBounce: 0)) {
-            let item = DueeTask(
-                dueDate: draftHasDueDate ? draftDueDate : nil,
-                text: cleaned
-            )
             modelContext.insert(item)
             draftText = ""
         }
 
+        markTaskRecentlyAdded(item.id)
+
         persist()
+    }
+
+    private func markTaskRecentlyAdded(_ taskID: UUID) {
+        recentlyAddedTaskIDs.insert(taskID)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 420_000_000)
+            recentlyAddedTaskIDs.remove(taskID)
+        }
     }
 
     private func toggleCompletion(for task: DueeTask) {

@@ -321,6 +321,7 @@
               <h2>Done</h2>
             </div>
             <ul id="doneList" class="task-list"></ul>
+            <button id="doneShowMoreButton" class="text-button done-show-more" type="button" hidden></button>
             <p id="emptyDone" class="empty-copy">Completed tasks show up here.</p>
           </section>
         </div>
@@ -372,13 +373,10 @@
     hidden
   ></section>
 
-  <div
+  <dialog
     id="calendarDialog"
     class="calendar-dialog"
-    role="dialog"
-    aria-modal="true"
     aria-labelledby="calendarMonthLabel"
-    tabindex="-1"
     hidden
   >
     <section class="calendar-panel">
@@ -409,7 +407,7 @@
         <button id="calendarDone" class="add calendar-done" type="button">Done</button>
       </footer>
     </section>
-  </div>
+  </dialog>
 
   <dialog id="editDialog" class="edit-dialog">
     <form method="dialog" class="edit-form" id="editForm">

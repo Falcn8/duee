@@ -6,11 +6,18 @@ struct TaskRowView: View {
 
     let task: DueeTask
     let namespace: Namespace.ID
+    let isNewlyAdded: Bool
     let onToggle: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovered = false
+
+    private enum DueUrgency {
+        case none
+        case tomorrow
+        case today
+    }
 
     var body: some View {
         Button(action: onToggle) {
@@ -50,9 +57,14 @@ struct TaskRowView: View {
                     .stroke(rowStrokeColor, lineWidth: 0.5)
             )
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .scaleEffect(isNewlyAdded ? 1.012 : 1)
+            .shadow(color: addHighlightColor, radius: isNewlyAdded ? 10 : 0, y: isNewlyAdded ? 4 : 0)
             .matchedGeometryEffect(id: task.id, in: namespace)
         }
         .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.3), value: isNewlyAdded)
+        .animation(.snappy(duration: 0.24, extraBounce: 0), value: task.isCompleted)
+        .animation(.easeOut(duration: 0.2), value: dueUrgency)
         .onHover { hovering in
             isHovered = hovering
         }
@@ -70,19 +82,76 @@ struct TaskRowView: View {
     }
 
     private var rowBackground: some ShapeStyle {
-        if colorTheme.isCurrent {
-            if colorScheme == .dark {
-                return Color.white.opacity(task.isCompleted ? (isHovered ? 0.16 : 0.12) : (isHovered ? 0.24 : 0.2))
+        if task.isCompleted {
+            if colorTheme.isCurrent {
+                if colorScheme == .dark {
+                    return Color.white.opacity(isHovered ? 0.16 : 0.12)
+                }
+                return Color.black.opacity(isHovered ? 0.08 : 0.06)
             }
-            return Color.black.opacity(task.isCompleted ? (isHovered ? 0.08 : 0.06) : (isHovered ? 0.12 : 0.09))
+            let base = colorTheme.surfaceTone(for: colorScheme)
+            let completedOpacity = colorScheme == .dark ? (isHovered ? 0.25 : 0.2) : (isHovered ? 0.18 : 0.14)
+            return base.opacity(completedOpacity)
+        }
+
+        if colorTheme.isCurrent {
+            switch dueUrgency {
+            case .today:
+                return colorScheme == .dark
+                    ? .white.opacity(isHovered ? 0.28 : 0.24)
+                    : .black.opacity(isHovered ? 0.12 : 0.1)
+            case .tomorrow:
+                return colorScheme == .dark
+                    ? .white.opacity(isHovered ? 0.25 : 0.21)
+                    : .black.opacity(isHovered ? 0.11 : 0.09)
+            case .none:
+                return colorScheme == .dark
+                    ? .white.opacity(isHovered ? 0.24 : 0.2)
+                    : .black.opacity(isHovered ? 0.12 : 0.09)
+            }
+        }
+
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? Color.white.opacity(isHovered ? 0.24 : 0.2) : Color.black.opacity(isHovered ? 0.12 : 0.09)
         }
         let base = colorTheme.surfaceTone(for: colorScheme)
-        let completedOpacity = colorScheme == .dark ? (isHovered ? 0.25 : 0.2) : (isHovered ? 0.18 : 0.14)
-        let activeOpacity = colorScheme == .dark ? (isHovered ? 0.34 : 0.28) : (isHovered ? 0.25 : 0.2)
-        return base.opacity(task.isCompleted ? completedOpacity : activeOpacity)
+        let activeOpacity: Double
+        switch dueUrgency {
+        case .today:
+            activeOpacity = colorScheme == .dark ? (isHovered ? 0.38 : 0.32) : (isHovered ? 0.28 : 0.23)
+        case .tomorrow:
+            activeOpacity = colorScheme == .dark ? (isHovered ? 0.35 : 0.29) : (isHovered ? 0.25 : 0.21)
+        case .none:
+            activeOpacity = colorScheme == .dark ? (isHovered ? 0.34 : 0.28) : (isHovered ? 0.25 : 0.2)
+        }
+        return base.opacity(activeOpacity)
     }
 
     private var rowStrokeColor: Color {
+        if isNewlyAdded {
+            if colorTheme.isCurrent {
+                return colorScheme == .dark ? .white.opacity(0.34) : .black.opacity(0.22)
+            }
+            return colorTheme.accentTone(for: colorScheme).opacity(colorScheme == .dark ? 0.44 : 0.32)
+        }
+
+        if !task.isCompleted {
+            switch dueUrgency {
+            case .today:
+                if colorTheme.isCurrent {
+                    return colorScheme == .dark ? .white.opacity(0.28) : .black.opacity(0.2)
+                }
+                return colorTheme.warningTone(for: colorScheme).opacity(colorScheme == .dark ? 0.46 : 0.34)
+            case .tomorrow:
+                if colorTheme.isCurrent {
+                    return colorScheme == .dark ? .white.opacity(0.23) : .black.opacity(0.17)
+                }
+                return colorTheme.accentTone(for: colorScheme).opacity(colorScheme == .dark ? 0.36 : 0.26)
+            case .none:
+                break
+            }
+        }
+
         if colorTheme.isCurrent {
             if colorScheme == .dark {
                 return .white.opacity(task.isCompleted ? 0.14 : 0.2)
@@ -90,6 +159,16 @@ struct TaskRowView: View {
             return .black.opacity(task.isCompleted ? 0.1 : 0.16)
         }
         return colorTheme.neutralTone(for: colorScheme).opacity(task.isCompleted ? 0.15 : 0.23)
+    }
+
+    private var addHighlightColor: Color {
+        if !isNewlyAdded {
+            return .clear
+        }
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.16) : .black.opacity(0.1)
+        }
+        return colorTheme.accentTone(for: colorScheme).opacity(colorScheme == .dark ? 0.24 : 0.16)
     }
 
     private var checkColor: Color {
@@ -106,7 +185,21 @@ struct TaskRowView: View {
         if !task.hasDueDate {
             return .secondary.opacity(0.82)
         }
-        return isOverdue ? colorTheme.warningTone(for: colorScheme).opacity(0.9) : .secondary
+        if isOverdue {
+            return colorTheme.warningTone(for: colorScheme).opacity(0.9)
+        }
+
+        switch dueUrgency {
+        case .today:
+            return colorTheme.warningTone(for: colorScheme).opacity(0.86)
+        case .tomorrow:
+            if colorTheme.isCurrent {
+                return .primary.opacity(0.72)
+            }
+            return colorTheme.accentTone(for: colorScheme).opacity(0.78)
+        case .none:
+            return .secondary
+        }
     }
 
     private var isOverdue: Bool {
@@ -120,6 +213,21 @@ struct TaskRowView: View {
         let today = calendar.startOfDay(for: .now)
         let dueDay = calendar.startOfDay(for: task.dueDate)
         return calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+    }
+
+    private var dueUrgency: DueUrgency {
+        guard !task.isCompleted, let daysFromToday else {
+            return .none
+        }
+
+        switch daysFromToday {
+        case 0:
+            return .today
+        case 1:
+            return .tomorrow
+        default:
+            return .none
+        }
     }
 
     private var dueLabelText: String {

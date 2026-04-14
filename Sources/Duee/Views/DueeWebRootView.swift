@@ -5,6 +5,8 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct DueeWebRootView: View {
+    private let completedTaskPageSize = 6
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dueeColorTheme) private var colorTheme
 
@@ -30,6 +32,8 @@ struct DueeWebRootView: View {
     @State private var collapseAnchorBottomY: CGFloat?
     @State private var developerToolsOpen = false
     @State private var developerReplaceImport = false
+    @State private var recentlyAddedTaskIDs: Set<UUID> = []
+    @State private var visibleCompletedTaskCount = 6
     @Namespace private var rowAnimation
 
     private var effectiveCollapsed: Bool {
@@ -58,6 +62,7 @@ struct DueeWebRootView: View {
         .padding(.trailing, 18)
         .padding(.bottom, effectiveCollapsed ? 4 : 18)
         .background(.clear)
+        .tint(interfaceAccent)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -106,7 +111,11 @@ struct DueeWebRootView: View {
     @ViewBuilder
     private var content: some View {
         if store.showVerifySentPage {
-            DueeWebVerifyEmailCard(store: store)
+            DueeWebVerifyEmailCard(store: store) {
+                Task {
+                    await store.bootstrap(baseURL: apiBaseURL)
+                }
+            }
 
             if !store.statusMessage.isEmpty {
                 DueeWebStatusBanner(message: store.statusMessage, kind: store.statusKind)
@@ -170,6 +179,14 @@ struct DueeWebRootView: View {
             .sorted(by: completionNewestFirst)
     }
 
+    private var visibleCompletedTasks: [DueeTask] {
+        Array(completedTasks.prefix(visibleCompletedTaskCount))
+    }
+
+    private var hiddenCompletedTaskCount: Int {
+        max(completedTasks.count - visibleCompletedTasks.count, 0)
+    }
+
     private func dueDateAscending(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
         if lhs.hasDueDate != rhs.hasDueDate {
             return lhs.hasDueDate && !rhs.hasDueDate
@@ -180,7 +197,7 @@ struct DueeWebRootView: View {
         }
 
         if lhs.dueDate == rhs.dueDate {
-            return lhs.createdAt < rhs.createdAt
+            return lhs.createdAt > rhs.createdAt
         }
         return lhs.dueDate < rhs.dueDate
     }
@@ -210,6 +227,13 @@ struct DueeWebRootView: View {
             return colorScheme == .dark ? .white.opacity(0.22) : .black.opacity(0.14)
         }
         return colorTheme.neutralTone(for: colorScheme).opacity(colorScheme == .dark ? 0.24 : 0.18)
+    }
+
+    private var interfaceAccent: Color {
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.86)
+        }
+        return colorTheme.accentTone(for: colorScheme).opacity(0.96)
     }
 
     private var headerButtonFill: Color {
@@ -351,6 +375,7 @@ struct DueeWebRootView: View {
                     TaskRowView(
                         task: task,
                         namespace: rowAnimation,
+                        isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                         onToggle: { toggleCompletion(for: task) },
                         onEdit: { beginEditing(task) },
                         onDelete: { deleteTask(task) }
@@ -358,7 +383,7 @@ struct DueeWebRootView: View {
                     .transition(
                         .asymmetric(
                             insertion: .opacity.combined(with: .move(edge: .top)),
-                            removal: .opacity
+                            removal: .opacity.combined(with: .scale(scale: 0.97))
                         )
                     )
                 }
@@ -375,15 +400,25 @@ struct DueeWebRootView: View {
                 .padding(.leading, 2)
                 .padding(.bottom, 2)
 
-            ForEach(completedTasks) { task in
+            ForEach(visibleCompletedTasks) { task in
                 TaskRowView(
                     task: task,
                     namespace: rowAnimation,
+                    isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                     onToggle: { toggleCompletion(for: task) },
                     onEdit: { beginEditing(task) },
                     onDelete: { deleteTask(task) }
                 )
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            }
+
+            if hiddenCompletedTaskCount > 0 {
+                Button("Show \(min(hiddenCompletedTaskCount, completedTaskPageSize)) more") {
+                    visibleCompletedTaskCount += completedTaskPageSize
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 4)
             }
         }
     }
@@ -475,12 +510,24 @@ struct DueeWebRootView: View {
         guard !cleaned.isEmpty else { return }
 
         let dueDate = draftHasDueDate ? draftDueDate : nil
+        let existingTaskIDs = Set(tasks.map(\.id))
 
         Task {
             let created = await store.createTask(text: cleaned, dueDate: dueDate)
             if created {
                 draftText = ""
+                if let newTaskID = tasks.first(where: { !existingTaskIDs.contains($0.id) })?.id {
+                    markTaskRecentlyAdded(newTaskID)
+                }
             }
+        }
+    }
+
+    private func markTaskRecentlyAdded(_ taskID: UUID) {
+        recentlyAddedTaskIDs.insert(taskID)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 420_000_000)
+            recentlyAddedTaskIDs.remove(taskID)
         }
     }
 
@@ -699,12 +746,17 @@ struct DueeWebRootView: View {
 
 private struct DueeWebVerifyEmailCard: View {
     @ObservedObject var store: DueeWebStore
+    let onReload: (() -> Void)?
     @State private var isDeleteFormVisible = false
     @State private var deleteConfirmation = ""
     @State private var deletePassword = ""
 
     private var signedInUnverified: Bool {
         store.isSignedInAndUnverified
+    }
+
+    private var isBusy: Bool {
+        store.isMutating || store.isBootstrapping
     }
 
     private var pageTitle: String {
@@ -767,6 +819,23 @@ private struct DueeWebVerifyEmailCard: View {
                 )
 
             VStack(alignment: .leading, spacing: 4) {
+                    if signedInUnverified, let onReload {
+                        Button {
+                            onReload()
+                        } label: {
+                            HStack(spacing: 8) {
+                                if store.isBootstrapping {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text("Reload verification status")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isBusy)
+                    }
+
                 Text("1. Open the verification email from duee.")
                 Text("2. Use the verification link in that email.")
                 Text("3. Come back and continue in duee.")
@@ -790,14 +859,14 @@ private struct DueeWebVerifyEmailCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.isMutating)
+                .disabled(isBusy)
 
                 if !signedInUnverified {
                     Button("Back to sign in") {
                         store.dismissVerificationPromptToSignIn()
                     }
                     .buttonStyle(.bordered)
-                    .disabled(store.isMutating)
+                    .disabled(isBusy)
                 }
 
                 if signedInUnverified {
@@ -810,7 +879,7 @@ private struct DueeWebVerifyEmailCard: View {
                     }
                     .buttonStyle(.bordered)
                     .tint(.red)
-                    .disabled(store.isMutating)
+                    .disabled(isBusy)
                 }
             }
 
@@ -818,11 +887,11 @@ private struct DueeWebVerifyEmailCard: View {
                 VStack(alignment: .leading, spacing: 7) {
                     TextField("Type DELETE to confirm", text: $deleteConfirmation)
                         .textFieldStyle(.roundedBorder)
-                        .disabled(store.isMutating)
+                        .disabled(isBusy)
 
                     SecureField("Current password", text: $deletePassword)
                         .textFieldStyle(.roundedBorder)
-                        .disabled(store.isMutating)
+                        .disabled(isBusy)
 
                     Button("Delete account permanently") {
                         Task {
@@ -994,6 +1063,9 @@ private struct DueeWebEmptyStateCard: View {
 }
 
 private struct DueeWebEditTaskSheetView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dueeColorTheme) private var colorTheme
+
     @Binding var taskText: String
     @Binding var dueDate: Date
     @Binding var hasDueDate: Bool
@@ -1035,6 +1107,14 @@ private struct DueeWebEditTaskSheetView: View {
         }
         .padding(18)
         .frame(width: 320)
+        .tint(sheetAccent)
+    }
+
+    private var sheetAccent: Color {
+        if colorTheme.isCurrent {
+            return colorScheme == .dark ? .white.opacity(0.9) : .black.opacity(0.86)
+        }
+        return colorTheme.accentTone(for: colorScheme).opacity(0.96)
     }
 }
 

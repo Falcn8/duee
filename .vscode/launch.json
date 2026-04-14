@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:duee}",
+            "name": "Debug Duee",
+            "target": "Duee",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Duee"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:duee}",
+            "name": "Release Duee",
+            "target": "Duee",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Duee"
+        }
+    ]
+}

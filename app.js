@@ -10,6 +10,9 @@ const DELETE_ACCOUNT_CONFIRMATION_TOKEN = "DELETE";
 const AUTO_SYNC_INTERVAL_MS = 60 * 1000;
 const AUTO_SYNC_MIN_GAP_MS = 10 * 1000;
 const AUTH_ACTION_TOKEN_REGEX = /^[A-Za-z0-9_-]{32,256}$/;
+const SIDE_CALENDAR_MAX_DOTS = 3;
+const INITIAL_VISIBLE_DONE_TASKS = 6;
+const DONE_TASKS_PAGE_SIZE = 6;
 
 const state = {
   tasks: [],
@@ -43,7 +46,11 @@ const state = {
   pendingDeleteAccountResolver: null,
   pendingResetPasswordToken: "",
   developerToolsOpen: false,
+  deletingTaskIds: new Set(),
+  recentlyAddedTaskIds: new Set(),
+  recentlyRestoredTaskIds: new Set(),
   recentlyCompletedTaskIds: new Set(),
+  visibleDoneTaskCount: INITIAL_VISIBLE_DONE_TASKS,
   autoSyncTimerId: null,
   autoSyncInFlight: false,
   lastAutoSyncAt: 0,
@@ -65,6 +72,7 @@ const refs = {
   statusSignIn: document.getElementById("statusSignIn"),
   activeList: document.getElementById("activeList"),
   doneList: document.getElementById("doneList"),
+  doneShowMoreButton: document.getElementById("doneShowMoreButton"),
   emptyUpcoming: document.getElementById("emptyUpcoming"),
   emptyDone: document.getElementById("emptyDone"),
   sideCalendarCard: document.getElementById("sideCalendarCard"),
@@ -319,6 +327,11 @@ async function init() {
   refs.activeList.addEventListener("click", onTaskAction);
   refs.doneList.addEventListener("click", onTaskAction);
 
+  refs.doneShowMoreButton?.addEventListener("click", () => {
+    state.visibleDoneTaskCount += DONE_TASKS_PAGE_SIZE;
+    render();
+  });
+
   refs.editDueToggle.addEventListener("click", () => {
     state.editHasDueDate = !state.editHasDueDate;
     if (!state.editHasDueDate) {
@@ -433,8 +446,13 @@ async function init() {
     }
   });
 
+  refs.calendarDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeCalendar();
+  });
+
   window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !refs.calendarDialog.hidden) {
+    if (event.key === "Escape" && isCalendarOpen()) {
       event.preventDefault();
       closeCalendar();
     }
@@ -1029,7 +1047,7 @@ async function addTaskFromDraft() {
       return;
     }
 
-    state.tasks.push({
+    const newTask = {
       id: createId(),
       text,
       hasDueDate: state.draftHasDueDate,
@@ -1037,7 +1055,10 @@ async function addTaskFromDraft() {
       isCompleted: false,
       createdAt: new Date().toISOString(),
       completedAt: null,
-    });
+    };
+
+    state.tasks.push(newTask);
+    markTaskRecentlyAdded(newTask.id);
 
     saveLocalModeTasks();
     refs.taskInput.value = "";
@@ -1074,6 +1095,7 @@ async function addTaskFromDraft() {
   };
 
   state.tasks.push(optimisticTask);
+  markTaskRecentlyAdded(optimisticId);
   saveTasksCache();
   refs.taskInput.value = "";
   refs.taskInput.focus();
@@ -1094,11 +1116,15 @@ async function addTaskFromDraft() {
     } else {
       state.tasks.push(createdTask);
     }
+    if (state.recentlyAddedTaskIds.delete(optimisticId)) {
+      markTaskRecentlyAdded(createdTask.id);
+    }
     saveTasksCache();
     clearStatus();
     render();
   } catch (error) {
     state.tasks = state.tasks.filter((item) => item.id !== optimisticId);
+    state.recentlyAddedTaskIds.delete(optimisticId);
     saveTasksCache();
     render();
 
@@ -1158,9 +1184,11 @@ async function toggleTaskCompletion(id) {
     task.isCompleted = !task.isCompleted;
     task.completedAt = task.isCompleted ? new Date().toISOString() : null;
     if (task.isCompleted) {
+      state.recentlyRestoredTaskIds.delete(task.id);
       markTaskRecentlyCompleted(task.id);
     } else {
       state.recentlyCompletedTaskIds.delete(task.id);
+      markTaskRecentlyRestored(task.id);
     }
     saveLocalModeTasks();
     render();
@@ -1173,6 +1201,10 @@ async function toggleTaskCompletion(id) {
   }
 
   if (state.pendingTaskMutationIds.has(id)) {
+    return;
+  }
+
+  if (state.deletingTaskIds.has(id)) {
     return;
   }
 
@@ -1190,9 +1222,11 @@ async function toggleTaskCompletion(id) {
   task.isCompleted = nextCompleted;
   task.completedAt = nextCompleted ? new Date().toISOString() : null;
   if (nextCompleted) {
+    state.recentlyRestoredTaskIds.delete(task.id);
     markTaskRecentlyCompleted(task.id);
   } else {
     state.recentlyCompletedTaskIds.delete(task.id);
+    markTaskRecentlyRestored(task.id);
   }
   state.pendingTaskMutationIds.add(id);
   saveTasksCache();
@@ -1211,6 +1245,8 @@ async function toggleTaskCompletion(id) {
 
     task.isCompleted = previousState.isCompleted;
     task.completedAt = previousState.completedAt;
+    state.recentlyCompletedTaskIds.delete(id);
+    state.recentlyRestoredTaskIds.delete(id);
     saveTasksCache();
     setStatus(error.message || "Could not update task. Retry sync and try again.", "error", { retry: true });
   } finally {
@@ -1231,7 +1267,9 @@ async function removeTask(id) {
       return;
     }
 
+    await animateTaskDeletion(id);
     state.tasks = state.tasks.filter((item) => item.id !== id);
+    state.deletingTaskIds.delete(id);
     saveLocalModeTasks();
     render();
     return;
@@ -1262,7 +1300,9 @@ async function removeTask(id) {
   }
 
   const removedTask = state.tasks[index];
+  await animateTaskDeletion(id);
   state.tasks.splice(index, 1);
+  state.deletingTaskIds.delete(id);
   saveTasksCache();
   clearStatus();
   render();
@@ -1279,6 +1319,7 @@ async function removeTask(id) {
     }
 
     state.tasks.splice(index, 0, removedTask);
+    state.deletingTaskIds.delete(id);
     saveTasksCache();
     render();
     setStatus(error.message || "Could not delete task. Retry sync and try again.", "error", { retry: true });
@@ -1810,11 +1851,19 @@ function render() {
     .filter((task) => task.isCompleted)
     .sort(compareDoneByCompletionNewest);
 
+  const visibleDoneTasks = doneTasks.slice(0, state.visibleDoneTaskCount);
+  const hiddenDoneCount = Math.max(doneTasks.length - visibleDoneTasks.length, 0);
+
   refs.activeList.replaceChildren(...activeTasks.map(renderTask));
-  refs.doneList.replaceChildren(...doneTasks.map(renderTask));
+  refs.doneList.replaceChildren(...visibleDoneTasks.map(renderTask));
 
   refs.emptyUpcoming.hidden = activeTasks.length > 0;
   refs.emptyDone.hidden = doneTasks.length > 0;
+
+  if (refs.doneShowMoreButton) {
+    refs.doneShowMoreButton.hidden = hiddenDoneCount === 0 || state.prefs.minimalMode;
+    refs.doneShowMoreButton.textContent = `Show ${Math.min(hiddenDoneCount, DONE_TASKS_PAGE_SIZE)} more`;
+  }
 
   const doneSection = refs.doneList.closest(".stack");
   doneSection.hidden = state.prefs.minimalMode;
@@ -1838,6 +1887,9 @@ function renderTask(task) {
 
   card.dataset.id = task.id;
   card.classList.toggle("done", task.isCompleted);
+  card.classList.toggle("task-card--is-deleting", state.deletingTaskIds.has(task.id));
+  card.classList.toggle("task-card--just-added", state.recentlyAddedTaskIds.has(task.id));
+  card.classList.toggle("task-card--just-restored", state.recentlyRestoredTaskIds.has(task.id));
   card.classList.toggle("task-card--just-done", state.recentlyCompletedTaskIds.has(task.id));
 
   text.textContent = task.text;
@@ -1845,16 +1897,18 @@ function renderTask(task) {
   meta.textContent = due.text;
   meta.classList.toggle("overdue", due.overdue);
   card.classList.toggle("due-today", due.today && !task.isCompleted);
+  card.classList.toggle("due-tomorrow", due.tomorrow && !task.isCompleted);
 
   toggle.setAttribute(
     "aria-label",
     task.isCompleted ? `Restore ${task.text}` : `Mark ${task.text} complete`
   );
-  toggle.disabled = state.pendingTaskMutationIds.has(task.id);
+  const isTaskBusy = state.pendingTaskMutationIds.has(task.id) || state.deletingTaskIds.has(task.id);
+  toggle.disabled = isTaskBusy;
 
   const editButton = fragment.querySelector("[data-action='edit']");
   const removeButton = fragment.querySelector("[data-action='remove']");
-  const disableTaskActions = state.requestInFlight || state.pendingTaskMutationIds.has(task.id);
+  const disableTaskActions = state.requestInFlight || isTaskBusy;
   editButton.disabled = disableTaskActions;
   removeButton.disabled = disableTaskActions;
 
@@ -1863,7 +1917,7 @@ function renderTask(task) {
 
 function dueLabel(task) {
   if (!task.hasDueDate || !task.dueDate) {
-    return { text: "no due date", overdue: false, today: false };
+    return { text: "no due date", overdue: false, today: false, tomorrow: false };
   }
 
   const dueDate = fromIsoDay(task.dueDate);
@@ -1873,22 +1927,26 @@ function dueLabel(task) {
   });
 
   if (task.isCompleted) {
-    return { text: `due ${dateText}`, overdue: false, today: false };
+    return { text: `due ${dateText}`, overdue: false, today: false, tomorrow: false };
   }
 
   const delta = dayDelta(task.dueDate);
   if (delta === 0) {
-    return { text: `due ${dateText} · today`, overdue: false, today: true };
+    return { text: `due ${dateText} · today`, overdue: false, today: true, tomorrow: false };
+  }
+
+  if (delta === 1) {
+    return { text: `due ${dateText} · tomorrow`, overdue: false, today: false, tomorrow: true };
   }
 
   if (delta > 0) {
     const dayWord = delta === 1 ? "day" : "days";
-    return { text: `due ${dateText} · in ${delta} ${dayWord}`, overdue: false, today: false };
+    return { text: `due ${dateText} · in ${delta} ${dayWord}`, overdue: false, today: false, tomorrow: false };
   }
 
   const late = Math.abs(delta);
   const dayWord = late === 1 ? "day" : "days";
-  return { text: `due ${dateText} · ${late} ${dayWord} late`, overdue: true, today: false };
+  return { text: `due ${dateText} · ${late} ${dayWord} late`, overdue: true, today: false, tomorrow: false };
 }
 
 function compareByDueDate(lhs, rhs) {
@@ -1904,7 +1962,7 @@ function compareByDueDate(lhs, rhs) {
     return fromIsoDay(lhs.dueDate).getTime() - fromIsoDay(rhs.dueDate).getTime();
   }
 
-  return new Date(lhs.createdAt).getTime() - new Date(rhs.createdAt).getTime();
+  return new Date(rhs.createdAt).getTime() - new Date(lhs.createdAt).getTime();
 }
 
 function compareDoneByCompletionNewest(lhs, rhs) {
@@ -1943,6 +2001,44 @@ function markTaskRecentlyCompleted(taskId) {
   }, 260);
 }
 
+function markTaskRecentlyRestored(taskId) {
+  if (!taskId) {
+    return;
+  }
+
+  state.recentlyRestoredTaskIds.add(taskId);
+  window.setTimeout(() => {
+    if (state.recentlyRestoredTaskIds.delete(taskId)) {
+      render();
+    }
+  }, 260);
+}
+
+function markTaskRecentlyAdded(taskId) {
+  if (!taskId) {
+    return;
+  }
+
+  state.recentlyAddedTaskIds.add(taskId);
+  window.setTimeout(() => {
+    if (state.recentlyAddedTaskIds.delete(taskId)) {
+      render();
+    }
+  }, 420);
+}
+
+async function animateTaskDeletion(taskId) {
+  if (!taskId) {
+    return;
+  }
+
+  state.deletingTaskIds.add(taskId);
+  render();
+  await new Promise((resolve) => {
+    window.setTimeout(resolve, 180);
+  });
+}
+
 function replaceTask(updatedTask) {
   const index = state.tasks.findIndex((item) => item.id === updatedTask.id);
   if (index < 0) {
@@ -1978,7 +2074,7 @@ function syncAuthUI() {
   }
 
   if (refs.accountBar) {
-    refs.accountBar.hidden = state.useLocalStorageMode || !signedIn || showVerifySentPage;
+    refs.accountBar.hidden = state.useLocalStorageMode || !signedIn;
   }
 
   if (refs.accountDisplayName) {
@@ -2934,16 +3030,16 @@ function renderSideCalendar() {
     if (dueTasks.length > 0) {
       const dotWrap = document.createElement("span");
       dotWrap.className = "side-calendar-dots";
-      const dotCount = Math.min(dueTasks.length, 4);
+      const dotCount = Math.min(dueTasks.length, SIDE_CALENDAR_MAX_DOTS);
       for (let dotIndex = 0; dotIndex < dotCount; dotIndex += 1) {
         const dot = document.createElement("span");
         dot.className = "side-calendar-dot";
         dotWrap.appendChild(dot);
       }
-      if (dueTasks.length > 4) {
+      if (dueTasks.length > SIDE_CALENDAR_MAX_DOTS) {
         const more = document.createElement("span");
         more.className = "side-calendar-dot-more";
-        more.textContent = `+${dueTasks.length - 4}`;
+        more.textContent = `+${dueTasks.length - SIDE_CALENDAR_MAX_DOTS}`;
         dotWrap.appendChild(more);
       }
       dayButton.appendChild(dotWrap);
@@ -3256,12 +3352,14 @@ function openCalendar(target) {
   state.calendarFocusedIso = currentIso;
 
   refs.calendarDialog.hidden = false;
+  openDialogElement(refs.calendarDialog);
   renderCalendar();
   focusCalendarActiveDay();
 }
 
 function closeCalendar() {
   const returnFocusTarget = state.calendarReturnFocusEl;
+  closeDialogElement(refs.calendarDialog);
   refs.calendarDialog.hidden = true;
   state.calendarTarget = null;
   state.calendarFocusedIso = null;
@@ -3302,8 +3400,12 @@ function shiftCalendarMonth(amount) {
   focusCalendarActiveDay();
 }
 
+function isCalendarOpen() {
+  return Boolean(refs.calendarDialog) && (refs.calendarDialog.open || !refs.calendarDialog.hidden);
+}
+
 function handleCalendarKeydown(event) {
-  if (refs.calendarDialog.hidden) {
+  if (!isCalendarOpen()) {
     return;
   }
 
