@@ -163,6 +163,19 @@ struct DueeColorTheme: Identifiable, Hashable {
         return luminance > 0.57 ? .black.opacity(0.82) : .white.opacity(0.94)
     }
 
+    func attentionTone(for colorScheme: ColorScheme) -> Color {
+        if isCurrent {
+            return colorScheme == .dark ? .cyan : .indigo
+        }
+
+        let candidates = [accentSwatch, supportSwatch, secondDarkestSwatch, secondLightestSwatch]
+        if let swatch = candidates.first(where: { !$0.hasWarmBias && $0.luminance > 0.18 && $0.luminance < 0.82 }) {
+            return swatch.color
+        }
+
+        return colorScheme == .dark ? .cyan : .indigo
+    }
+
     func warningTone(for colorScheme: ColorScheme) -> Color {
         if isCurrent {
             return .red

@@ -2,7 +2,6 @@ import SwiftUI
 
 #if os(macOS)
 import AppKit
-import UniformTypeIdentifiers
 
 struct DueeWebRootView: View {
     private let completedTaskPageSize = 6
@@ -30,8 +29,6 @@ struct DueeWebRootView: View {
     @State private var isCollapsed = false
     @State private var expandedWindowHeight: CGFloat = 470
     @State private var collapseAnchorBottomY: CGFloat?
-    @State private var developerToolsOpen = false
-    @State private var developerReplaceImport = false
     @State private var recentlyAddedTaskIDs: Set<UUID> = []
     @State private var visibleCompletedTaskCount = 6
     @Namespace private var rowAnimation
@@ -153,8 +150,6 @@ struct DueeWebRootView: View {
                         if !minimalMode && !completedTasks.isEmpty {
                             doneSection
                         }
-
-                        developerToolsSection
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
@@ -423,87 +418,6 @@ struct DueeWebRootView: View {
         }
     }
 
-    private var developerToolsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Developer")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Import/export tasks and run sync utilities.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 8)
-
-                Button(developerToolsOpen ? "Hide tools" : "Show tools") {
-                    developerToolsOpen.toggle()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(store.isMutating)
-            }
-
-            if developerToolsOpen {
-                Toggle("Replace existing tasks on import", isOn: $developerReplaceImport)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .disabled(store.isMutating)
-
-                VStack(alignment: .leading, spacing: 7) {
-                    Button("Import todo list JSON...") {
-                        importTodoListForDeveloper()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(store.isMutating)
-
-                    Button("Export todo list") {
-                        exportTodoListForDeveloper()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(store.isMutating)
-
-                    Button("Clear completed tasks") {
-                        Task {
-                            await store.clearCompletedTasksForDeveloper()
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(store.isMutating)
-
-                    Button("Force sync") {
-                        Task {
-                            await store.forceSyncForDeveloper()
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(store.isMutating)
-
-                    Button("Export debug snapshot") {
-                        exportDebugSnapshotForDeveloper()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(store.isMutating)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.secondary.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(.secondary.opacity(0.18), lineWidth: 0.5)
-        )
-    }
-
     private func createTask() {
         clearInputFocus()
         let cleaned = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -564,83 +478,6 @@ struct DueeWebRootView: View {
         Task {
             await store.deleteTask(taskID: task.id)
         }
-    }
-
-    private func exportTodoListForDeveloper() {
-        clearInputFocus()
-        do {
-            let data = try store.exportTodoListForDeveloperData()
-            saveJSONData(data, suggestedFilename: developerFilename(prefix: "duee-todo-export"))
-        } catch {
-            presentDeveloperFileError(error.localizedDescription)
-        }
-    }
-
-    private func exportDebugSnapshotForDeveloper() {
-        clearInputFocus()
-        do {
-            let data = try store.exportDebugSnapshotForDeveloperData()
-            saveJSONData(data, suggestedFilename: developerFilename(prefix: "duee-debug-snapshot"))
-        } catch {
-            presentDeveloperFileError(error.localizedDescription)
-        }
-    }
-
-    private func importTodoListForDeveloper() {
-        clearInputFocus()
-
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Import"
-
-        guard panel.runModal() == .OK, let url = panel.url else {
-            return
-        }
-
-        do {
-            let data = try Data(contentsOf: url)
-            Task {
-                await store.importTodoListForDeveloper(data: data, replace: developerReplaceImport)
-            }
-        } catch {
-            presentDeveloperFileError("Could not read the selected JSON file.")
-        }
-    }
-
-    private func saveJSONData(_ data: Data, suggestedFilename: String) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = suggestedFilename
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-
-        guard panel.runModal() == .OK, let url = panel.url else {
-            return
-        }
-
-        do {
-            try data.write(to: url, options: .atomic)
-        } catch {
-            presentDeveloperFileError("Could not write the JSON file to disk.")
-        }
-    }
-
-    private func presentDeveloperFileError(_ message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Developer tools"
-        alert.informativeText = message
-        alert.runModal()
-    }
-
-    private func developerFilename(prefix: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let timestamp = formatter.string(from: .now).replacingOccurrences(of: ":", with: "-")
-        return "\(prefix)-\(timestamp).json"
     }
 
     private func clearInputFocus() {

@@ -191,7 +191,7 @@ struct TaskRowView: View {
 
         switch dueUrgency {
         case .today:
-            return colorTheme.warningTone(for: colorScheme).opacity(0.86)
+            return colorTheme.attentionTone(for: colorScheme).opacity(colorScheme == .dark ? 0.94 : 0.88)
         case .tomorrow:
             if colorTheme.isCurrent {
                 return .primary.opacity(0.72)
