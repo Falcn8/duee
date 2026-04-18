@@ -23,6 +23,8 @@ const state = {
   showVerifySentPage: false,
   postRegisterEmail: "",
   postRegisterVerificationEmailSent: true,
+  authVerifySentOverrideTitle: "",
+  authVerifySentOverrideMessage: "",
   authRequestInFlight: false,
   profileRequestInFlight: false,
   prefsSyncInFlight: false,
@@ -42,7 +44,6 @@ const state = {
   calendarReturnFocusEl: null,
   activeToastSource: null,
   toastDismissTimeoutId: null,
-  pendingTaskDeleteResolver: null,
   pendingDeleteAccountResolver: null,
   pendingResetPasswordToken: "",
   developerToolsOpen: false,
@@ -155,10 +156,7 @@ const refs = {
   editDueDateInput: document.getElementById("editDueDateInput"),
   editDueToggle: document.getElementById("editDueToggle"),
   cancelEdit: document.getElementById("cancelEdit"),
-  deleteTaskDialog: document.getElementById("deleteTaskDialog"),
-  deleteTaskPrompt: document.getElementById("deleteTaskPrompt"),
-  deleteTaskCancel: document.getElementById("deleteTaskCancel"),
-  deleteTaskConfirm: document.getElementById("deleteTaskConfirm"),
+  editDeleteButton: document.getElementById("editDeleteButton"),
   deleteAccountDialog: document.getElementById("deleteAccountDialog"),
   deleteAccountForm: document.getElementById("deleteAccountForm"),
   deleteAccountConfirmInput: document.getElementById("deleteAccountConfirmInput"),
@@ -376,17 +374,8 @@ async function init() {
     state.editingTaskId = null;
   });
 
-  refs.deleteTaskCancel?.addEventListener("click", () => {
-    resolveTaskDeletePrompt(false);
-  });
-
-  refs.deleteTaskConfirm?.addEventListener("click", () => {
-    resolveTaskDeletePrompt(true);
-  });
-
-  refs.deleteTaskDialog?.addEventListener("cancel", (event) => {
-    event.preventDefault();
-    resolveTaskDeletePrompt(false);
+  refs.editDeleteButton?.addEventListener("click", () => {
+    removeEditingTask();
   });
 
   refs.deleteAccountCancel?.addEventListener("click", () => {
@@ -631,7 +620,12 @@ async function init() {
     state.tasks = loadLocalModeTasks();
     saveLocalModeTasks();
     setStatus("Debug mode enabled. Tasks are stored only on this device.", "warn");
-    if (authActions.verifyEmailToken || authActions.resetPasswordToken) {
+    if (
+      authActions.verifyEmailToken
+      || authActions.resetPasswordToken
+      || authActions.invalidVerifyEmailToken
+      || authActions.invalidResetPasswordToken
+    ) {
       setAuthStatus("Auth action links are unavailable in local debug mode.", "warn");
     }
     render();
@@ -655,6 +649,7 @@ async function bootstrapAuthenticatedSession() {
       state.showVerifySentPage = true;
       state.postRegisterEmail = state.sessionUser.email || "";
       state.postRegisterVerificationEmailSent = true;
+      clearVerifySentPageOverride();
       state.tasks = [];
       stopAutoSyncLoop();
       clearStatus();
@@ -677,18 +672,28 @@ async function bootstrapAuthenticatedSession() {
 
 function consumeAuthActionQueryParams() {
   const params = new URLSearchParams(window.location.search);
-  const verifyEmailToken = sanitizeAuthActionToken(params.get("verify_email_token"));
-  const resetPasswordToken = sanitizeAuthActionToken(params.get("reset_password_token"));
+  const rawVerifyEmailToken = params.get("verify_email_token");
+  const rawResetPasswordToken = params.get("reset_password_token");
+  const hasVerifyEmailToken = rawVerifyEmailToken !== null;
+  const hasResetPasswordToken = rawResetPasswordToken !== null;
+  const verifyEmailToken = sanitizeAuthActionToken(rawVerifyEmailToken);
+  const resetPasswordToken = sanitizeAuthActionToken(rawResetPasswordToken);
 
-  if (!verifyEmailToken && !resetPasswordToken) {
+  if (!hasVerifyEmailToken && !hasResetPasswordToken) {
     return {
       verifyEmailToken: "",
       resetPasswordToken: "",
+      invalidVerifyEmailToken: false,
+      invalidResetPasswordToken: false,
     };
   }
 
-  params.delete("verify_email_token");
-  params.delete("reset_password_token");
+  if (hasVerifyEmailToken) {
+    params.delete("verify_email_token");
+  }
+  if (hasResetPasswordToken) {
+    params.delete("reset_password_token");
+  }
   const nextQuery = params.toString();
   const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
   window.history.replaceState({}, "", nextUrl);
@@ -696,6 +701,8 @@ function consumeAuthActionQueryParams() {
   return {
     verifyEmailToken,
     resetPasswordToken,
+    invalidVerifyEmailToken: hasVerifyEmailToken && !verifyEmailToken,
+    invalidResetPasswordToken: hasResetPasswordToken && !resetPasswordToken,
   };
 }
 
@@ -704,13 +711,100 @@ async function handleAuthActionParams(actions) {
     return;
   }
 
-  if (actions.verifyEmailToken) {
+  if (actions.invalidVerifyEmailToken) {
+    showVerificationLinkIssueState(
+      "That verification link is invalid. Request a new verification email and use the newest link."
+    );
+  } else if (actions.verifyEmailToken) {
     await verifyEmailTokenFromLink(actions.verifyEmailToken);
   }
 
-  if (actions.resetPasswordToken) {
+  if (actions.invalidResetPasswordToken) {
+    showResetLinkIssueState(
+      "That password reset link is invalid. Enter your email to request a new reset link."
+    );
+  } else if (actions.resetPasswordToken) {
     openResetPasswordDialog(actions.resetPasswordToken);
   }
+}
+
+function setVerifySentPageOverride({ title = "", message = "" } = {}) {
+  state.authVerifySentOverrideTitle = typeof title === "string" ? title.trim() : "";
+  state.authVerifySentOverrideMessage = typeof message === "string" ? message.trim() : "";
+}
+
+function clearVerifySentPageOverride() {
+  setVerifySentPageOverride();
+}
+
+function showVerificationLinkIssueState(statusMessage) {
+  if (state.useLocalStorageMode) {
+    return;
+  }
+
+  const email = state.sessionUser?.email || state.postRegisterEmail || refs.authEmail?.value.trim() || "";
+  state.showVerifySentPage = true;
+  state.postRegisterEmail = email;
+  state.postRegisterVerificationEmailSent = true;
+  setVerifySentPageOverride({
+    title: "Verification link issue",
+    message: email
+      ? `The verification link for ${email} is invalid or expired. Request a new verification email below, then use the newest link.`
+      : "That verification link is invalid or expired. Request a new verification email below, then use the newest link.",
+  });
+  syncAuthUI();
+  setAuthVerifySentStatus(
+    statusMessage || "Verification link is invalid or expired. Request a new verification email.",
+    "error"
+  );
+}
+
+function showResetLinkIssueState(statusMessage) {
+  if (state.useLocalStorageMode) {
+    return;
+  }
+
+  state.showVerifySentPage = false;
+  clearVerifySentPageOverride();
+  clearAuthVerifySentStatus();
+  state.authMode = "login";
+  saveAuthMode();
+  syncAuthModeUI();
+  syncAuthUI();
+  setAuthStatus(
+    statusMessage || "Password reset link is invalid or expired. Request a new reset link.",
+    "error"
+  );
+
+  openForgotPasswordDialog();
+  setForgotPasswordDialogStatus(
+    "Enter your account email to receive a new password reset link.",
+    "warn"
+  );
+}
+
+function errorMessageIncludes(message, fragments) {
+  const normalized = String(message || "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return fragments.some((fragment) => normalized.includes(fragment));
+}
+
+function isVerificationLinkError(error) {
+  return errorMessageIncludes(error?.message, [
+    "verification token is required",
+    "verification token is invalid",
+    "verification link is invalid or has expired",
+  ]);
+}
+
+function isResetLinkError(error) {
+  return errorMessageIncludes(error?.message, [
+    "reset token is required",
+    "reset token is invalid",
+    "reset link is invalid or has expired",
+  ]);
 }
 
 async function verifyEmailTokenFromLink(token) {
@@ -748,11 +842,17 @@ async function verifyEmailTokenFromLink(token) {
     setAuthStatus(
       payload.alreadyVerified
         ? "Email already verified. Sign in to continue."
-        : "Email verified. Sign in to continue.",
+        : "Email verified. Sign in with your password to continue.",
       "info",
       { persistToast: true }
     );
   } catch (error) {
+    if (isVerificationLinkError(error)) {
+      showVerificationLinkIssueState(
+        "Verification link is invalid or expired. Request a new verification email below."
+      );
+      return;
+    }
     setAuthStatus(error.message || "Could not verify your email link.", "error");
   } finally {
     setAuthRequestInFlight(false);
@@ -836,6 +936,7 @@ async function submitAuth() {
       state.showVerifySentPage = true;
       state.postRegisterEmail = state.sessionUser.email || email;
       state.postRegisterVerificationEmailSent = true;
+      clearVerifySentPageOverride();
       state.currentView = "tasks";
       state.authMode = "login";
       saveAuthMode();
@@ -904,6 +1005,7 @@ function requireSignIn(message = "", type = "info") {
   state.showVerifySentPage = false;
   state.postRegisterEmail = "";
   state.postRegisterVerificationEmailSent = true;
+  clearVerifySentPageOverride();
   state.profileEditing = false;
   state.prefsSyncInFlight = false;
   state.prefsSyncPending = false;
@@ -1052,6 +1154,7 @@ async function addTaskFromDraft() {
       text,
       hasDueDate: state.draftHasDueDate,
       dueDate: state.draftHasDueDate ? normalizedDraftDate(refs.dueDateInput.value) : null,
+      isPinned: false,
       isCompleted: false,
       createdAt: new Date().toISOString(),
       completedAt: null,
@@ -1089,6 +1192,7 @@ async function addTaskFromDraft() {
     text,
     hasDueDate: state.draftHasDueDate,
     dueDate: state.draftHasDueDate ? normalizedDraftDate(refs.dueDateInput.value) : null,
+    isPinned: false,
     isCompleted: false,
     createdAt: new Date().toISOString(),
     completedAt: null,
@@ -1170,8 +1274,9 @@ function onTaskAction(event) {
     return;
   }
 
-  if (action === "remove") {
-    removeTask(id);
+  if (action === "pin" || action === "remove") {
+    toggleTaskPinned(id);
+    return;
   }
 }
 
@@ -1249,6 +1354,64 @@ async function toggleTaskCompletion(id) {
     state.recentlyRestoredTaskIds.delete(id);
     saveTasksCache();
     setStatus(error.message || "Could not update task. Retry sync and try again.", "error", { retry: true });
+  } finally {
+    state.pendingTaskMutationIds.delete(id);
+    render();
+  }
+}
+
+async function toggleTaskPinned(id) {
+  if (state.useLocalStorageMode) {
+    const task = state.tasks.find((item) => item.id === id);
+    if (!task) {
+      return;
+    }
+    task.isPinned = !task.isPinned;
+    saveLocalModeTasks();
+    render();
+    return;
+  }
+
+  if (!state.sessionUser) {
+    requireSignIn("Please sign in to manage tasks.", "warn");
+    return;
+  }
+
+  if (state.pendingTaskMutationIds.has(id)) {
+    return;
+  }
+
+  if (state.deletingTaskIds.has(id)) {
+    return;
+  }
+
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task) {
+    return;
+  }
+
+  const previousPinned = Boolean(task.isPinned);
+  const nextPinned = !previousPinned;
+
+  task.isPinned = nextPinned;
+  state.pendingTaskMutationIds.add(id);
+  saveTasksCache();
+  clearStatus();
+  render();
+
+  try {
+    const updated = await apiUpdateTask(id, { isPinned: nextPinned });
+    replaceTask(updated);
+    saveTasksCache();
+    clearStatus();
+  } catch (error) {
+    if (handleUnauthorizedError(error)) {
+      return;
+    }
+
+    task.isPinned = previousPinned;
+    saveTasksCache();
+    setStatus(error.message || "Could not update task pin status. Retry sync and try again.", "error", { retry: true });
   } finally {
     state.pendingTaskMutationIds.delete(id);
     render();
@@ -1351,41 +1514,23 @@ function closeEditDialog() {
   state.editingTaskId = null;
 }
 
+async function removeEditingTask() {
+  if (!state.editingTaskId || state.requestInFlight) {
+    return;
+  }
+
+  const taskId = state.editingTaskId;
+  closeEditDialog();
+  await removeTask(taskId);
+}
+
 async function confirmTaskDeletion(task) {
   const requiresConfirmation = Boolean(state.prefs.confirmDeletes);
   if (!requiresConfirmation) {
     return true;
   }
 
-  if (!refs.deleteTaskDialog || !refs.deleteTaskPrompt) {
-    return true;
-  }
-
-  if (state.pendingTaskDeleteResolver) {
-    state.pendingTaskDeleteResolver(false);
-    state.pendingTaskDeleteResolver = null;
-  }
-
-  refs.deleteTaskPrompt.textContent = `Delete "${task.text}"?`;
-  const opened = openDialogElement(refs.deleteTaskDialog);
-  if (!opened) {
-    return true;
-  }
-
-  return await new Promise((resolve) => {
-    state.pendingTaskDeleteResolver = resolve;
-  });
-}
-
-function resolveTaskDeletePrompt(confirmed) {
-  if (!state.pendingTaskDeleteResolver) {
-    return;
-  }
-
-  const resolve = state.pendingTaskDeleteResolver;
-  state.pendingTaskDeleteResolver = null;
-  closeDialogElement(refs.deleteTaskDialog);
-  resolve(Boolean(confirmed));
+  return window.confirm(`Delete "${task.text}"?`);
 }
 
 async function requestDeleteAccountCredentials() {
@@ -1499,7 +1644,10 @@ async function submitForgotPasswordDialog() {
   try {
     await apiRequestPasswordReset(email);
     closeDialogElement(refs.forgotPasswordDialog);
-    setAuthStatus("If that account exists, a reset link has been sent.", "info");
+    setAuthStatus(
+      "If an account exists for that email, we sent a password reset link. Check spam if needed.",
+      "info"
+    );
   } catch (error) {
     setForgotPasswordDialogStatus(error.message || "Could not send reset email.", "error");
   } finally {
@@ -1517,6 +1665,7 @@ function showVerifySentPageForEmail(email, verificationEmailSent = true) {
   state.showVerifySentPage = true;
   state.postRegisterEmail = normalizedEmail;
   state.postRegisterVerificationEmailSent = emailSent;
+  clearVerifySentPageOverride();
   if (refs.authEmail && normalizedEmail) {
     refs.authEmail.value = normalizedEmail;
   }
@@ -1525,12 +1674,12 @@ function showVerifySentPageForEmail(email, verificationEmailSent = true) {
   syncAuthUI();
   if (!emailSent) {
     setAuthVerifySentStatus(
-      "Account created, but the verification email could not be sent. Resend it now.",
+      "Account created, but verification email delivery failed. Resend it now.",
       "warn"
     );
     return;
   }
-  setAuthVerifySentStatus("Verification email sent. Check your inbox to continue.", "info");
+  setAuthVerifySentStatus("Verification email sent. Open the newest email to continue.", "info");
 }
 
 function showSignInAfterVerificationPrompt() {
@@ -1539,6 +1688,7 @@ function showSignInAfterVerificationPrompt() {
   }
 
   state.showVerifySentPage = false;
+  clearVerifySentPageOverride();
   clearAuthVerifySentStatus();
   syncAuthUI();
   refs.authPassword?.focus();
@@ -1551,7 +1701,10 @@ async function resendVerificationFromVerifySentPage() {
 
   const email = state.sessionUser?.email || state.postRegisterEmail || refs.authEmail?.value.trim() || "";
   if (!email) {
-    setAuthVerifySentStatus("We need your email to resend verification.", "warn");
+    setAuthVerifySentStatus(
+      "Enter your account email on the sign-in form so we can resend verification.",
+      "warn"
+    );
     if (!requiresEmailVerificationGate()) {
       showSignInAfterVerificationPrompt();
       refs.authEmail?.focus();
@@ -1561,6 +1714,7 @@ async function resendVerificationFromVerifySentPage() {
 
   setAuthRequestInFlight(true);
   state.postRegisterEmail = email;
+  clearVerifySentPageOverride();
   clearAuthVerifySentStatus();
   try {
     if (requiresEmailVerificationGate()) {
@@ -1585,7 +1739,12 @@ async function resendVerificationFromVerifySentPage() {
 
     state.postRegisterVerificationEmailSent = true;
     syncVerifySentPageUI();
-    setAuthVerifySentStatus("Verification email sent. Check your inbox.", "info");
+    setAuthVerifySentStatus(
+      requiresEmailVerificationGate()
+        ? "Verification email sent. Open the newest email to continue."
+        : "Verification email sent. Open the newest email, then sign in.",
+      "info"
+    );
   } catch (error) {
     setAuthVerifySentStatus(error.message || "Could not resend verification email.", "error");
   } finally {
@@ -1600,10 +1759,11 @@ function syncVerifySentPageUI() {
 
   const signedInUnverified = requiresEmailVerificationGate();
   const email = state.sessionUser?.email || state.postRegisterEmail || refs.authEmail?.value.trim() || "";
+  const overrideTitle = state.authVerifySentOverrideTitle;
+  const overrideMessage = state.authVerifySentOverrideMessage;
   if (refs.authVerifySentTitle) {
-    refs.authVerifySentTitle.textContent = signedInUnverified
-      ? "Verify your email to continue"
-      : "Check your email";
+    refs.authVerifySentTitle.textContent = overrideTitle
+      || (signedInUnverified ? "Verify your email to continue" : "Check your email");
   }
   if (refs.authVerifySentSignInButton) {
     refs.authVerifySentSignInButton.hidden = signedInUnverified;
@@ -1611,6 +1771,11 @@ function syncVerifySentPageUI() {
   if (refs.authVerifySentDeleteButton) {
     refs.authVerifySentDeleteButton.hidden = !signedInUnverified;
     refs.authVerifySentDeleteButton.disabled = state.authRequestInFlight || state.profileRequestInFlight;
+  }
+
+  if (overrideMessage) {
+    refs.authVerifySentMessage.textContent = overrideMessage;
+    return;
   }
 
   if (!state.postRegisterVerificationEmailSent) {
@@ -1697,6 +1862,7 @@ async function submitResetPasswordDialog() {
 
   setAuthRequestInFlight(true);
   setResetPasswordDialogStatus("", "info");
+  let resetLinkIssueMessage = "";
   try {
     await apiConfirmPasswordReset(state.pendingResetPasswordToken, password);
     closeResetPasswordDialog();
@@ -1706,9 +1872,18 @@ async function submitResetPasswordDialog() {
     requireSignIn("Password updated. Sign in with your new password.", "info");
     refs.authEmail?.focus();
   } catch (error) {
-    setResetPasswordDialogStatus(error.message || "Could not reset password.", "error");
+    if (isResetLinkError(error)) {
+      resetLinkIssueMessage = "That password reset link is invalid or expired. Request a new reset link.";
+    } else {
+      setResetPasswordDialogStatus(error.message || "Could not reset password.", "error");
+    }
   } finally {
     setAuthRequestInFlight(false);
+  }
+
+  if (resetLinkIssueMessage) {
+    closeResetPasswordDialog();
+    showResetLinkIssueState(resetLinkIssueMessage);
   }
 }
 
@@ -1891,6 +2066,7 @@ function renderTask(task) {
   card.classList.toggle("task-card--just-added", state.recentlyAddedTaskIds.has(task.id));
   card.classList.toggle("task-card--just-restored", state.recentlyRestoredTaskIds.has(task.id));
   card.classList.toggle("task-card--just-done", state.recentlyCompletedTaskIds.has(task.id));
+  card.classList.toggle("task-card--pinned", Boolean(task.isPinned));
 
   text.textContent = task.text;
   const due = dueLabel(task);
@@ -1907,12 +2083,49 @@ function renderTask(task) {
   toggle.disabled = isTaskBusy;
 
   const editButton = fragment.querySelector("[data-action='edit']");
-  const removeButton = fragment.querySelector("[data-action='remove']");
+  const pinButton = fragment.querySelector("[data-action='pin']")
+    || fragment.querySelector("[data-action='remove']");
   const disableTaskActions = state.requestInFlight || isTaskBusy;
-  editButton.disabled = disableTaskActions;
-  removeButton.disabled = disableTaskActions;
+  if (editButton) {
+    editButton.disabled = disableTaskActions;
+    editButton.title = "Edit task";
+  }
+  if (pinButton) {
+    // Backward compatibility for stale cached HTML that still uses data-action="remove".
+    if (pinButton.dataset.action === "remove") {
+      upgradeLegacyRemoveButtonToPin(pinButton);
+    }
+    pinButton.dataset.action = "pin";
+    pinButton.disabled = disableTaskActions;
+    pinButton.classList.toggle("is-active", Boolean(task.isPinned));
+    pinButton.classList.remove("danger");
+    pinButton.setAttribute("aria-pressed", String(Boolean(task.isPinned)));
+    pinButton.setAttribute("aria-label", task.isPinned ? `Unpin ${task.text}` : `Pin ${task.text}`);
+    pinButton.title = task.isPinned ? "Unpin task" : "Pin task";
+  }
 
   return fragment;
+}
+
+function upgradeLegacyRemoveButtonToPin(button) {
+  if (!button) {
+    return;
+  }
+
+  button.classList.remove("remove", "danger");
+  button.classList.add("pin");
+
+  const icon = button.querySelector("svg");
+  if (!icon) {
+    return;
+  }
+
+  icon.classList.remove("icon-trash");
+  icon.classList.add("icon-pin");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.innerHTML = `
+    <path d="m16.25 4.5 3.25 3.25-2.85 1.9v3.6l2.1 2.1v1.2h-5.65v3.25l-1.2.7-1.2-.7v-3.25H5.1v-1.2l2.1-2.1v-3.6L4.35 7.75 7.6 4.5h8.65Z" />
+  `.trim();
 }
 
 function dueLabel(task) {
@@ -1950,6 +2163,10 @@ function dueLabel(task) {
 }
 
 function compareByDueDate(lhs, rhs) {
+  if (Boolean(lhs.isPinned) !== Boolean(rhs.isPinned)) {
+    return lhs.isPinned ? -1 : 1;
+  }
+
   if (Boolean(lhs.hasDueDate) !== Boolean(rhs.hasDueDate)) {
     return lhs.hasDueDate ? -1 : 1;
   }
@@ -1966,6 +2183,10 @@ function compareByDueDate(lhs, rhs) {
 }
 
 function compareDoneByCompletionNewest(lhs, rhs) {
+  if (Boolean(lhs.isPinned) !== Boolean(rhs.isPinned)) {
+    return lhs.isPinned ? -1 : 1;
+  }
+
   const rhsTime = completionTimestamp(rhs);
   const lhsTime = completionTimestamp(lhs);
   if (rhsTime !== lhsTime) {
@@ -2346,6 +2567,7 @@ function exportTodoListForDeveloper() {
       text: task.text,
       hasDueDate: Boolean(task.hasDueDate),
       dueDate: task.hasDueDate ? task.dueDate : null,
+      isPinned: Boolean(task.isPinned),
       isCompleted: Boolean(task.isCompleted),
       createdAt: task.createdAt || null,
       completedAt: task.completedAt || null,
@@ -2432,6 +2654,7 @@ async function applyImportedTasksForDeveloper(importedTasks, { replace }) {
       text: importedTask.text,
       hasDueDate: Boolean(importedTask.hasDueDate),
       dueDate: importedTask.hasDueDate ? normalizedDraftDate(importedTask.dueDate) : null,
+      isPinned: Boolean(importedTask.isPinned),
     });
 
     if (importedTask.isCompleted) {
@@ -2707,7 +2930,7 @@ async function resendEmailVerification() {
       setProfileStatus("Email is already verified.", "info");
       return;
     }
-    setProfileStatus("Verification email sent.", "info");
+    setProfileStatus("Verification email sent. Open the newest email to finish verification.", "info");
   } catch (error) {
     if (handleUnauthorizedError(error)) {
       return;
@@ -2934,6 +3157,9 @@ function syncEditDueToggleUI() {
   );
   refs.editDueToggle.setAttribute("aria-pressed", String(state.editHasDueDate));
   refs.editDueToggle.disabled = state.requestInFlight;
+  if (refs.editDeleteButton) {
+    refs.editDeleteButton.disabled = state.requestInFlight || !state.editingTaskId;
+  }
 }
 
 function syncAddButtonUI() {
@@ -3707,6 +3933,7 @@ function normalizeTask(rawTask) {
     text,
     hasDueDate: dueDate !== null,
     dueDate,
+    isPinned: Boolean(rawTask.isPinned),
     isCompleted: Boolean(rawTask.isCompleted),
     createdAt: typeof rawTask.createdAt === "string" ? rawTask.createdAt : new Date().toISOString(),
     completedAt: typeof rawTask.completedAt === "string" ? rawTask.completedAt : null,
@@ -4163,6 +4390,7 @@ async function migrateCachedTasks(cachedTasks) {
       text: task.text,
       hasDueDate: Boolean(task.hasDueDate),
       dueDate: task.hasDueDate ? normalizedDraftDate(task.dueDate) : null,
+      isPinned: Boolean(task.isPinned),
     });
 
     if (task.isCompleted) {

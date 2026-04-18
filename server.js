@@ -16,9 +16,15 @@ const DB_PASSWORD = process.env.DB_PASSWORD ?? "";
 const DB_NAME = process.env.DB_NAME ?? "duee";
 const DB_CONNECTION_LIMIT = Number.parseInt(process.env.DB_CONNECTION_LIMIT ?? "10", 10);
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
-const DEBUG_LOCAL_STORAGE = process.env.DEBUG_LOCAL_STORAGE === "1";
+const NODE_ENV = (process.env.NODE_ENV ?? "development").trim().toLowerCase();
+const EXPLICIT_DEBUG_LOCAL_STORAGE = parseEnvBoolean(process.env.DEBUG_LOCAL_STORAGE, false);
 const SESSION_SECRET = process.env.SESSION_SECRET ?? "";
 const HOSTNAME = process.env.HOSTNAME ?? "";
+const FORCE_DEBUG_LOCAL_STORAGE = NODE_ENV !== "production"
+  && !EXPLICIT_DEBUG_LOCAL_STORAGE
+  && !HOSTNAME
+  && (!DB_USER || !SESSION_SECRET);
+const DEBUG_LOCAL_STORAGE = EXPLICIT_DEBUG_LOCAL_STORAGE || FORCE_DEBUG_LOCAL_STORAGE;
 const PUBLIC_APP_ORIGIN = normalizeOptionalOrigin(process.env.PUBLIC_APP_ORIGIN ?? "");
 const SESSION_TTL_DAYS = Number.parseInt(process.env.SESSION_TTL_DAYS ?? "30", 10);
 const SESSION_TOUCH_INTERVAL_SECONDS = Number.parseInt(process.env.SESSION_TOUCH_INTERVAL_SECONDS ?? "300", 10);
@@ -27,6 +33,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY ?? "";
 const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL ?? "";
 const RESEND_WELCOME_EMAILS = parseEnvBoolean(process.env.RESEND_WELCOME_EMAILS, true);
 const RESEND_AUTH_EMAILS = parseEnvBoolean(process.env.RESEND_AUTH_EMAILS, true);
+const AUTH_EMAIL_DELIVERY_MODE = (process.env.AUTH_EMAIL_DELIVERY_MODE ?? "resend").trim().toLowerCase();
 const EMAIL_VERIFICATION_TOKEN_TTL_MINUTES = Number.parseInt(
   process.env.EMAIL_VERIFICATION_TOKEN_TTL_MINUTES ?? "1440",
   10
@@ -91,6 +98,12 @@ const DEFAULT_USER_PREFERENCES = Object.freeze({
   horizontalTaskSections: false,
   sideCalendarVisible: true,
 });
+
+if (FORCE_DEBUG_LOCAL_STORAGE) {
+  console.warn(
+    "DB_USER or SESSION_SECRET is missing. Falling back to DEBUG_LOCAL_STORAGE mode for local development."
+  );
+}
 
 if (!DEBUG_LOCAL_STORAGE && !DB_USER) {
   throw new Error("Missing DB_USER environment variable.");
@@ -164,6 +177,10 @@ if (
   || UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE > 5000
 ) {
   throw new Error("UNVERIFIED_ACCOUNT_CLEANUP_BATCH_SIZE must be between 1 and 5000.");
+}
+
+if (!["resend", "console"].includes(AUTH_EMAIL_DELIVERY_MODE)) {
+  throw new Error("AUTH_EMAIL_DELIVERY_MODE must be either 'resend' or 'console'.");
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -661,10 +678,10 @@ app.get("/api/tasks", requireDatabaseMode, requireAuth, requireVerifiedEmail, as
   try {
     const [rows] = await pool.query(
       `
-      SELECT id, text, has_due_date, due_date, is_completed, created_at, completed_at
+      SELECT id, text, has_due_date, due_date, is_pinned, is_completed, created_at, completed_at
       FROM tasks
       WHERE user_id = ?
-      ORDER BY is_completed ASC, has_due_date DESC, due_date ASC, created_at ASC
+      ORDER BY is_completed ASC, is_pinned DESC, has_due_date DESC, due_date ASC, created_at ASC
       `,
       [req.authUser.id]
     );
@@ -686,15 +703,16 @@ app.post(
     const text = normalizeTaskText(req.body?.text);
     const hasDueDate = req.body?.hasDueDate !== undefined ? Boolean(req.body.hasDueDate) : true;
     const dueDate = hasDueDate ? normalizeDueDate(req.body?.dueDate) : null;
+    const isPinned = req.body?.isPinned !== undefined ? Boolean(req.body.isPinned) : false;
 
     const id = crypto.randomUUID();
 
     await pool.query(
       `
-      INSERT INTO tasks (id, user_id, text, has_due_date, due_date, is_completed, completed_at)
-      VALUES (?, ?, ?, ?, ?, 0, NULL)
+      INSERT INTO tasks (id, user_id, text, has_due_date, due_date, is_pinned, is_completed, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, NULL)
       `,
-      [id, req.authUser.id, text, hasDueDate ? 1 : 0, dueDate]
+      [id, req.authUser.id, text, hasDueDate ? 1 : 0, dueDate, isPinned ? 1 : 0]
     );
 
     const createdTask = await getTaskById(id, req.authUser.id);
@@ -738,6 +756,9 @@ app.patch(
     const nextCompleted = requestedCompletion !== undefined
       ? Boolean(requestedCompletion)
       : Boolean(existing.is_completed);
+    const nextPinned = req.body?.isPinned !== undefined
+      ? Boolean(req.body.isPinned)
+      : Boolean(existing.is_pinned);
 
     let nextCompletedAt = existing.completed_at;
     if (requestedCompletion !== undefined) {
@@ -751,13 +772,14 @@ app.patch(
     await pool.query(
       `
       UPDATE tasks
-      SET text = ?, has_due_date = ?, due_date = ?, is_completed = ?, completed_at = ?
+      SET text = ?, has_due_date = ?, due_date = ?, is_pinned = ?, is_completed = ?, completed_at = ?
       WHERE id = ? AND user_id = ?
       `,
       [
         nextText,
         nextHasDueDate ? 1 : 0,
         nextDueDate,
+        nextPinned ? 1 : 0,
         nextCompleted ? 1 : 0,
         nextCompletedAt,
         taskId,
@@ -830,7 +852,17 @@ async function main() {
     console.warn("Running in DEBUG_LOCAL_STORAGE mode. MySQL routes are disabled.");
   }
 
-  if ((RESEND_WELCOME_EMAILS || RESEND_AUTH_EMAILS) && (!resend || !RESEND_FROM_EMAIL)) {
+  if (AUTH_EMAIL_DELIVERY_MODE === "console" && RESEND_AUTH_EMAILS) {
+    console.warn(
+      "Auth email delivery mode is set to console. Verification and reset links will be logged instead of sent."
+    );
+  }
+
+  if (
+    AUTH_EMAIL_DELIVERY_MODE === "resend"
+    && (RESEND_WELCOME_EMAILS || RESEND_AUTH_EMAILS)
+    && (!resend || !RESEND_FROM_EMAIL)
+  ) {
     console.warn(
       "Resend email features are enabled but not fully configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL."
     );
@@ -1166,6 +1198,7 @@ async function ensureSchema() {
       text VARCHAR(240) NOT NULL,
       has_due_date TINYINT(1) NOT NULL DEFAULT 1,
       due_date DATE NULL,
+      is_pinned TINYINT(1) NOT NULL DEFAULT 0,
       is_completed TINYINT(1) NOT NULL DEFAULT 0,
       created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
       completed_at DATETIME(3) NULL,
@@ -1238,6 +1271,7 @@ async function ensureSchema() {
   );
 
   await ensureTaskUserIdColumn();
+  await ensureTaskPinnedColumn();
 
   await ensureIndex(
     "tasks",
@@ -1249,6 +1283,18 @@ async function ensureSchema() {
     "tasks",
     "idx_tasks_user_order",
     "CREATE INDEX idx_tasks_user_order ON tasks (user_id, is_completed, has_due_date, due_date, created_at)"
+  );
+
+  await ensureIndex(
+    "tasks",
+    "idx_tasks_order_pinned",
+    "CREATE INDEX idx_tasks_order_pinned ON tasks (is_completed, is_pinned, has_due_date, due_date, created_at)"
+  );
+
+  await ensureIndex(
+    "tasks",
+    "idx_tasks_user_order_pinned",
+    "CREATE INDEX idx_tasks_user_order_pinned ON tasks (user_id, is_completed, is_pinned, has_due_date, due_date, created_at)"
   );
 
   await ensureIndex(
@@ -1283,6 +1329,13 @@ async function ensureTaskUserIdColumn() {
   const [rows] = await pool.query("SHOW COLUMNS FROM tasks LIKE 'user_id'");
   if (rows.length === 0) {
     await pool.query("ALTER TABLE tasks ADD COLUMN user_id CHAR(36) NULL AFTER id");
+  }
+}
+
+async function ensureTaskPinnedColumn() {
+  const [rows] = await pool.query("SHOW COLUMNS FROM tasks LIKE 'is_pinned'");
+  if (rows.length === 0) {
+    await pool.query("ALTER TABLE tasks ADD COLUMN is_pinned TINYINT(1) NOT NULL DEFAULT 0 AFTER due_date");
   }
 }
 
@@ -1939,7 +1992,7 @@ async function getUserByEmail(email) {
 async function getTaskById(taskId, userId, raw = false) {
   const [rows] = await pool.query(
     `
-    SELECT id, user_id, text, has_due_date, due_date, is_completed, created_at, completed_at
+    SELECT id, user_id, text, has_due_date, due_date, is_pinned, is_completed, created_at, completed_at
     FROM tasks
     WHERE id = ? AND user_id = ?
     LIMIT 1
@@ -1961,10 +2014,10 @@ async function buildAccountExportPayload(userId) {
 
   const [taskRows] = await pool.query(
     `
-    SELECT id, text, has_due_date, due_date, is_completed, created_at, completed_at
+    SELECT id, text, has_due_date, due_date, is_pinned, is_completed, created_at, completed_at
     FROM tasks
     WHERE user_id = ?
-    ORDER BY is_completed ASC, has_due_date DESC, due_date ASC, created_at ASC
+    ORDER BY is_completed ASC, is_pinned DESC, has_due_date DESC, due_date ASC, created_at ASC
     `,
     [userId]
   );
@@ -2485,7 +2538,7 @@ function assertAuthEmailDeliveryConfigured() {
     throw serviceUnavailable("Email verification and password reset are currently disabled.");
   }
 
-  if (!resend || !RESEND_FROM_EMAIL) {
+  if (AUTH_EMAIL_DELIVERY_MODE === "resend" && (!resend || !RESEND_FROM_EMAIL)) {
     throw serviceUnavailable("Email delivery is not configured.");
   }
 }
@@ -2499,6 +2552,7 @@ async function sendEmailVerificationEmail({
   assertAuthEmailDeliveryConfigured();
   const safeName = escapeHtml(displayName || toEmail);
   const safeUrl = escapeHtml(verificationUrl);
+  const expiryLabel = formatAuthLinkExpiryLabel(EMAIL_VERIFICATION_TOKEN_TTL_MINUTES);
 
   const introHtml = includeWelcome
     ? "<p>Welcome to duee. Your account is almost ready.</p>"
@@ -2507,30 +2561,101 @@ async function sendEmailVerificationEmail({
     ? "Welcome to duee. Your account is almost ready."
     : "Please verify your email address to finish setting up your account.";
 
+  const subject = includeWelcome ? "Welcome to duee - verify your email" : "Verify your duee email";
+  const html = [
+    `<p>Hi ${safeName},</p>`,
+    introHtml,
+    "<p>Tap the link below to verify your email address:</p>",
+    `<p><a href="${safeUrl}">Verify email</a></p>`,
+    `<p>This link expires in ${expiryLabel}.</p>`,
+    "<p>If this link has expired, request a new verification email from the app.</p>",
+    "<p>If you didn't create this account, you can ignore this email.</p>",
+    "<p>- duee</p>",
+  ].join("");
+  const text = [
+    `Hi ${displayName || toEmail},`,
+    "",
+    introText,
+    "",
+    "Open this link to verify your email address:",
+    verificationUrl,
+    "",
+    `This link expires in ${expiryLabel}.`,
+    "If it has expired, request a new verification email from the app.",
+    "",
+    "If you didn't create this account, you can ignore this email.",
+    "",
+    "- duee",
+  ].join("\n");
+
+  await deliverAuthEmail({
+    kind: "email_verification",
+    toEmail,
+    subject,
+    actionUrl: verificationUrl,
+    html,
+    text,
+  });
+}
+
+async function sendPasswordResetEmail({ toEmail, displayName, resetUrl }) {
+  assertAuthEmailDeliveryConfigured();
+  const safeName = escapeHtml(displayName || toEmail);
+  const safeUrl = escapeHtml(resetUrl);
+  const expiryLabel = formatAuthLinkExpiryLabel(PASSWORD_RESET_TOKEN_TTL_MINUTES);
+
+  const subject = "Reset your duee password";
+  const html = [
+    `<p>Hi ${safeName},</p>`,
+    "<p>Tap the link below to reset your password:</p>",
+    `<p><a href="${safeUrl}">Reset password</a></p>`,
+    `<p>This link expires in ${expiryLabel}.</p>`,
+    "<p>If this link has expired, request a new password reset email from the app.</p>",
+    "<p>If you didn't request a password reset, you can safely ignore this email.</p>",
+    "<p>- duee</p>",
+  ].join("");
+  const text = [
+    `Hi ${displayName || toEmail},`,
+    "",
+    "Open this link to reset your password:",
+    resetUrl,
+    "",
+    `This link expires in ${expiryLabel}.`,
+    "If it has expired, request a new password reset email from the app.",
+    "",
+    "If you didn't request a password reset, you can safely ignore this email.",
+    "",
+    "- duee",
+  ].join("\n");
+
+  await deliverAuthEmail({
+    kind: "password_reset",
+    toEmail,
+    subject,
+    actionUrl: resetUrl,
+    html,
+    text,
+  });
+}
+
+async function deliverAuthEmail({ kind, toEmail, subject, actionUrl, html, text }) {
+  if (AUTH_EMAIL_DELIVERY_MODE === "console") {
+    logAuthEmailPreview({
+      kind,
+      toEmail,
+      subject,
+      actionUrl,
+      text,
+    });
+    return;
+  }
+
   const { error } = await resend.emails.send({
     from: RESEND_FROM_EMAIL,
     to: [toEmail],
-    subject: includeWelcome ? "Welcome to duee - verify your email" : "Verify your duee email",
-    html: [
-      `<p>Hi ${safeName},</p>`,
-      introHtml,
-      "<p>Tap the link below to verify your email address:</p>",
-      `<p><a href="${safeUrl}">Verify email</a></p>`,
-      "<p>If you didn't create this account, you can ignore this email.</p>",
-      "<p>- duee</p>",
-    ].join(""),
-    text: [
-      `Hi ${displayName || toEmail},`,
-      "",
-      introText,
-      "",
-      "Open this link to verify your email address:",
-      verificationUrl,
-      "",
-      "If you didn't create this account, you can ignore this email.",
-      "",
-      "- duee",
-    ].join("\n"),
+    subject,
+    html,
+    text,
   });
 
   if (error) {
@@ -2538,37 +2663,37 @@ async function sendEmailVerificationEmail({
   }
 }
 
-async function sendPasswordResetEmail({ toEmail, displayName, resetUrl }) {
-  assertAuthEmailDeliveryConfigured();
-  const safeName = escapeHtml(displayName || toEmail);
-  const safeUrl = escapeHtml(resetUrl);
+function logAuthEmailPreview({ kind, toEmail, subject, actionUrl, text }) {
+  const preview = [
+    "----- duee auth email preview -----",
+    `mode: ${AUTH_EMAIL_DELIVERY_MODE}`,
+    `kind: ${kind}`,
+    `to: ${toEmail}`,
+    `subject: ${subject}`,
+    `action_url: ${actionUrl}`,
+    "",
+    text,
+    "----- end duee auth email preview -----",
+  ].join("\n");
+  console.log(preview);
+}
 
-  const { error } = await resend.emails.send({
-    from: RESEND_FROM_EMAIL,
-    to: [toEmail],
-    subject: "Reset your duee password",
-    html: [
-      `<p>Hi ${safeName},</p>`,
-      "<p>Tap the link below to reset your password:</p>",
-      `<p><a href="${safeUrl}">Reset password</a></p>`,
-      "<p>If you didn't request a password reset, you can safely ignore this email.</p>",
-      "<p>- duee</p>",
-    ].join(""),
-    text: [
-      `Hi ${displayName || toEmail},`,
-      "",
-      "Open this link to reset your password:",
-      resetUrl,
-      "",
-      "If you didn't request a password reset, you can safely ignore this email.",
-      "",
-      "- duee",
-    ].join("\n"),
-  });
-
-  if (error) {
-    throw new Error(error.message || "Unknown Resend API error.");
+function formatAuthLinkExpiryLabel(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return "a short time";
   }
+
+  if (minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
 function escapeHtml(value) {
@@ -2666,6 +2791,7 @@ function toApiTask(row) {
     text: row.text,
     hasDueDate: Boolean(row.has_due_date),
     dueDate: row.due_date ?? null,
+    isPinned: Boolean(row.is_pinned),
     isCompleted: Boolean(row.is_completed),
     createdAt: toIsoDateTime(row.created_at),
     completedAt: row.completed_at ? toIsoDateTime(row.completed_at) : null,

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f4f4f5" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="duee" />
   <title>duee web</title>
@@ -425,21 +425,11 @@
         <button id="editDueToggle" class="ghost" type="button" aria-pressed="true">Use date</button>
       </div>
       <div class="dialog-actions">
+        <button class="ghost danger dialog-delete" type="button" id="editDeleteButton">Delete task</button>
         <button class="ghost" type="button" id="cancelEdit">Cancel</button>
         <button class="add" type="submit">Save</button>
       </div>
     </form>
-  </dialog>
-
-  <dialog id="deleteTaskDialog" class="edit-dialog">
-    <section class="edit-form">
-      <h3>Delete task?</h3>
-      <p id="deleteTaskPrompt" class="auth-hint"></p>
-      <div class="dialog-actions">
-        <button id="deleteTaskCancel" class="ghost" type="button">Cancel</button>
-        <button id="deleteTaskConfirm" class="ghost danger" type="button">Delete task</button>
-      </div>
-    </section>
   </dialog>
 
   <dialog id="deleteAccountDialog" class="edit-dialog">
@@ -532,10 +522,9 @@
             <path d="M4.25 19.75 5 16l10.75-10.75a1.6 1.6 0 0 1 2.27 0l.73.73a1.6 1.6 0 0 1 0 2.27L8 19l-3.75.75Z" />
           </svg>
         </button>
-        <button class="linky danger remove" data-action="remove" type="button" aria-label="Delete task">
-          <svg class="icon icon-trash" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 7.5h14M9 7.5V5.8a.8.8 0 0 1 .8-.8h4.4a.8.8 0 0 1 .8.8v1.7M7.1 7.5l.9 11.2a.9.9 0 0 0 .9.8h6.2a.9.9 0 0 0 .9-.8L17 7.5" />
-            <path d="M10.25 11v5.2M13.75 11v5.2" />
+        <button class="linky pin" data-action="pin" type="button" aria-label="Pin task">
+          <svg class="icon icon-pin" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m16.25 4.5 3.25 3.25-2.85 1.9v3.6l2.1 2.1v1.2h-5.65v3.25l-1.2.7-1.2-.7v-3.25H5.1v-1.2l2.1-2.1v-3.6L4.35 7.75 7.6 4.5h8.65Z" />
           </svg>
         </button>
       </div>

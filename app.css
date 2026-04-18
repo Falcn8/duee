@@ -1073,6 +1073,15 @@ h2 {
   color: color-mix(in srgb, var(--ink-soft) 82%, var(--brand) 18%);
 }
 
+.task-card.task-card--pinned:not(.done) {
+  border-color: color-mix(in srgb, var(--brand) 42%, var(--line-strong) 58%);
+  background: color-mix(in srgb, var(--surface) 80%, var(--brand-soft) 20%);
+}
+
+.task-card.task-card--pinned:not(.done) .task-meta {
+  color: color-mix(in srgb, var(--ink-soft) 72%, var(--brand) 28%);
+}
+
 .toggle {
   border: 2px solid var(--muted-border);
   width: 2.15rem;
@@ -1173,6 +1182,15 @@ h2 {
   color: var(--ink-soft);
   display: grid;
   place-items: center;
+  transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.linky:hover {
+  transform: translateY(-1px);
+}
+
+.linky:active {
+  transform: translateY(0);
 }
 
 .linky .icon {
@@ -1182,6 +1200,27 @@ h2 {
 
 .linky.danger {
   color: var(--danger);
+}
+
+.linky.pin.is-active {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 42%, var(--line) 58%);
+  background: color-mix(in srgb, var(--control) 80%, var(--brand-soft) 20%);
+  box-shadow: 0 0.2rem 0.6rem color-mix(in srgb, var(--brand) 20%, transparent 80%);
+}
+
+.linky.pin .icon {
+  transition: transform 140ms ease;
+}
+
+.linky.pin.is-active .icon {
+  transform: rotate(16deg) translateY(-0.02rem);
+}
+
+.task-card:hover .linky.pin:not(.is-active),
+.task-card:focus-within .linky.pin:not(.is-active) {
+  color: color-mix(in srgb, var(--ink-soft) 68%, var(--brand) 32%);
+  border-color: color-mix(in srgb, var(--line) 70%, var(--brand) 30%);
 }
 
 .done-show-more {
@@ -1565,6 +1604,10 @@ h2 {
   display: flex;
   justify-content: flex-end;
   gap: 0.45rem;
+}
+
+.dialog-actions .dialog-delete {
+  margin-right: auto;
 }
 
 .dialog-actions .add {
