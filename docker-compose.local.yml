@@ -13,6 +13,7 @@ services:
       SESSION_SECRET: duee-local-dev-session-secret-change-me
       SESSION_TTL_DAYS: 30
       COOKIE_SECURE: 0
+      AUTH_EMAIL_DELIVERY_MODE: ${AUTH_EMAIL_DELIVERY_MODE:-console}
       DB_HOST: db
       DB_PORT: 3306
       DB_USER: duee

@@ -111,6 +111,7 @@ cp /opt/apps/duee/.env.example /opt/stacks/apps/duee/.env
    - optional: `PUBLIC_APP_ORIGIN=https://your.domain` (used for email action links)
    - `RESEND_API_KEY=<resend-api-key>`
    - `RESEND_FROM_EMAIL=<sender@hexagon.one>` (must be on your verified Resend domain)
+   - optional: `AUTH_EMAIL_DELIVERY_MODE=resend` (`console` logs verification/reset links to server logs instead of sending email)
    - optional: `RESEND_WELCOME_EMAILS=1` (`0` removes welcome copy from the verification email)
    - optional: `RESEND_AUTH_EMAILS=1` (`0` disables verification/reset emails)
    - optional: `EMAIL_VERIFICATION_TOKEN_TTL_MINUTES=1440`
@@ -182,6 +183,13 @@ Switch mode locally:
 
 - MySQL mode (default): `DEBUG_LOCAL_STORAGE=0 docker compose -f docker-compose.local.yml up -d --build`
 - Debug localStorage mode: `DEBUG_LOCAL_STORAGE=1 docker compose -f docker-compose.local.yml up -d --build`
+
+Test auth email flows locally without Resend:
+
+- Set `AUTH_EMAIL_DELIVERY_MODE=console` (default in `docker-compose.local.yml`).
+- Trigger register / resend verification / forgot password from the app.
+- Read links from app logs: `docker compose -f docker-compose.local.yml logs -f app`.
+- Open the logged `action_url` in your browser to complete verification/reset end to end.
 
 Stop local stack:
 
