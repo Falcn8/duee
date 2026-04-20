@@ -61,6 +61,29 @@ open Package.swift
 
 Then run the `Duee` target from Xcode.
 
+## Build macOS Release Artifacts
+
+Use the provided release script to package a distributable app bundle from the Swift package executable:
+
+```bash
+./scripts/release-macos.sh
+```
+
+Artifacts are written to `release/`:
+
+- `Duee.app`
+- `Duee-macOS-<version>.zip`
+- `Duee-macOS-<version>.dmg`
+- `Duee-macOS-<version>.sha256`
+
+Optional environment variables:
+
+- `ICON_SOURCE` (default: `./logo.png`)
+- `VERSION` (default: latest git tag/commit)
+- `BUNDLE_ID` (default: `com.duee.app`)
+- `CODESIGN_IDENTITY` (default: ad-hoc `-`)
+- `SKIP_CODESIGN=1` to skip signing
+
 ## Use From Mobile
 
 To view and edit the same tasks from your iPhone:
