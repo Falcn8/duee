@@ -72,9 +72,33 @@ struct DueeWebTaskPayload: Decodable {
     let text: String
     let hasDueDate: Bool
     let dueDate: String?
+    let isPinned: Bool
     let isCompleted: Bool
     let createdAt: String?
     let completedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case text
+        case hasDueDate
+        case dueDate
+        case isPinned
+        case isCompleted
+        case createdAt
+        case completedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        hasDueDate = try container.decode(Bool.self, forKey: .hasDueDate)
+        dueDate = try container.decodeIfPresent(String.self, forKey: .dueDate)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        isCompleted = try container.decode(Bool.self, forKey: .isCompleted)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
+    }
 }
 
 struct DueeWebSessionPayload: Decodable {
@@ -98,6 +122,7 @@ private struct DueeDeveloperTaskRecord: Codable {
     let text: String
     let hasDueDate: Bool
     let dueDate: String?
+    let isPinned: Bool
     let isCompleted: Bool
     let createdAt: String?
     let completedAt: String?
@@ -134,6 +159,7 @@ private struct DueeDeveloperImportedTask {
     let text: String
     let hasDueDate: Bool
     let dueDate: Date?
+    let isPinned: Bool
     let isCompleted: Bool
 }
 
@@ -197,7 +223,10 @@ final class DueeWebStore: ObservableObject {
         guard let resolvedURL = normalizeBaseURL(cleanedURL) else {
             sessionUser = nil
             tasks = []
-            setStatus("Invalid API URL. Set a full URL such as http://localhost:8000.", kind: .error)
+            setStatus(
+                "Invalid API URL. Set a full URL such as \(DueeServerConfiguration.defaultAPIBaseURL).",
+                kind: .error
+            )
             return
         }
 
@@ -431,12 +460,49 @@ final class DueeWebStore: ObservableObject {
                 text: nil,
                 hasDueDate: nil,
                 dueDate: nil,
+                isPinned: nil,
                 isCompleted: isCompleted
             )
             try await loadTasks(using: client)
             clearStatus()
         } catch {
             applyError(error, fallback: "Could not update task.")
+        }
+    }
+
+    func setTaskPinned(taskID: UUID, isPinned: Bool) async {
+        guard let client else {
+            setStatus("Web API is not configured.", kind: .error)
+            return
+        }
+
+        guard sessionUser != nil else {
+            setStatus("Please sign in to update tasks.", kind: .warning)
+            return
+        }
+
+        guard !requiresEmailVerification else {
+            setStatus("Verify your email before updating tasks.", kind: .warning)
+            return
+        }
+
+        isMutating = true
+        defer { isMutating = false }
+
+        do {
+            try await client.ensureCsrfToken()
+            _ = try await client.updateTask(
+                id: taskID.uuidString.lowercased(),
+                text: nil,
+                hasDueDate: nil,
+                dueDate: nil,
+                isPinned: isPinned,
+                isCompleted: nil
+            )
+            try await loadTasks(using: client)
+            clearStatus()
+        } catch {
+            applyError(error, fallback: "Could not update task pin status.")
         }
     }
 
@@ -472,6 +538,7 @@ final class DueeWebStore: ObservableObject {
                 text: cleaned,
                 hasDueDate: dueDate != nil,
                 dueDate: dueDate.map(Self.isoDayString(from:)),
+                isPinned: nil,
                 isCompleted: nil
             )
             try await loadTasks(using: client)
@@ -666,7 +733,8 @@ final class DueeWebStore: ObservableObject {
             for importedTask in importedTasks {
                 let created = try await client.createTask(
                     text: importedTask.text,
-                    dueDate: importedTask.hasDueDate ? importedTask.dueDate.map(Self.isoDayString(from:)) : nil
+                    dueDate: importedTask.hasDueDate ? importedTask.dueDate.map(Self.isoDayString(from:)) : nil,
+                    isPinned: importedTask.isPinned
                 )
 
                 if importedTask.isCompleted {
@@ -675,6 +743,7 @@ final class DueeWebStore: ObservableObject {
                         text: nil,
                         hasDueDate: nil,
                         dueDate: nil,
+                        isPinned: nil,
                         isCompleted: true
                     )
                 }
@@ -748,6 +817,7 @@ final class DueeWebStore: ObservableObject {
             id: taskID,
             dueDate: parsedDueDate,
             text: payload.text,
+            isPinned: payload.isPinned,
             isCompleted: payload.isCompleted,
             createdAt: createdAt,
             completedAt: completedAt
@@ -903,6 +973,7 @@ final class DueeWebStore: ObservableObject {
             text: task.text,
             hasDueDate: task.hasDueDate,
             dueDate: task.hasDueDate ? isoDayString(from: task.dueDate) : nil,
+            isPinned: task.isPinned,
             isCompleted: task.isCompleted,
             createdAt: isoDateTimeString(from: task.createdAt),
             completedAt: isoDateTimeString(from: task.completedAt)
@@ -950,11 +1021,13 @@ final class DueeWebStore: ObservableObject {
 
         let dueDate = hasDueDate ? parseIsoDay(rawDueDate) : nil
         let isCompleted = boolValue(task["isCompleted"])
+        let isPinned = boolValue(task["isPinned"])
 
         return DueeDeveloperImportedTask(
             text: text,
             hasDueDate: dueDate != nil,
             dueDate: dueDate,
+            isPinned: isPinned,
             isCompleted: isCompleted
         )
     }
@@ -1060,11 +1133,12 @@ actor DueeWebAPIClient {
         return payload.tasks
     }
 
-    func createTask(text: String, dueDate: String?) async throws -> DueeWebTaskPayload {
+    func createTask(text: String, dueDate: String?, isPinned: Bool? = nil) async throws -> DueeWebTaskPayload {
         let payload = DueeTaskMutationRequest(
             text: text,
             hasDueDate: dueDate != nil,
             dueDate: dueDate,
+            isPinned: isPinned,
             isCompleted: nil
         )
         let data = try await request(path: "/tasks", method: "POST", body: try encoder.encode(payload))
@@ -1080,12 +1154,14 @@ actor DueeWebAPIClient {
         text: String?,
         hasDueDate: Bool?,
         dueDate: String?,
+        isPinned: Bool?,
         isCompleted: Bool?
     ) async throws -> DueeWebTaskPayload {
         let payload = DueeTaskMutationRequest(
             text: text,
             hasDueDate: hasDueDate,
             dueDate: dueDate,
+            isPinned: isPinned,
             isCompleted: isCompleted
         )
         let data = try await request(path: "/tasks/\(id)", method: "PATCH", body: try encoder.encode(payload))
@@ -1222,6 +1298,7 @@ private struct DueeTaskMutationRequest: Encodable {
     let text: String?
     let hasDueDate: Bool?
     let dueDate: String?
+    let isPinned: Bool?
     let isCompleted: Bool?
 }
 

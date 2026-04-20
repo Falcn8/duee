@@ -16,7 +16,7 @@ struct DueeWebRootView: View {
     @AppStorage(DueePreferenceKeys.appearanceMode) private var appearanceModeRaw = DueeAppearanceMode.system.rawValue
     @AppStorage(DueePreferenceKeys.colorThemeID) private var colorThemeID = DueeColorThemeCatalog.defaultThemeID
     @AppStorage(DueePreferenceKeys.customThemeHexes) private var customThemeHexes = DueeColorThemeCatalog.defaultCustomThemeRawValue
-    @AppStorage(DueePreferenceKeys.apiBaseURL) private var apiBaseURL = "http://localhost:8000"
+    private let apiBaseURL = DueeServerConfiguration.defaultAPIBaseURL
 
     @State private var draftDueDate = Date()
     @State private var draftHasDueDate = true
@@ -90,8 +90,7 @@ struct DueeWebRootView: View {
                 unfocusedBackgroundAlpha: $unfocusedBackgroundAlpha,
                 appearanceMode: appearanceModeBinding,
                 colorThemeID: $colorThemeID,
-                customThemeHexes: $customThemeHexes,
-                apiBaseURL: $apiBaseURL
+                customThemeHexes: $customThemeHexes
             )
         }
         .sheet(item: $editingTask) { _ in
@@ -183,6 +182,10 @@ struct DueeWebRootView: View {
     }
 
     private func dueDateAscending(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
+        if lhs.isPinned != rhs.isPinned {
+            return lhs.isPinned && !rhs.isPinned
+        }
+
         if lhs.hasDueDate != rhs.hasDueDate {
             return lhs.hasDueDate && !rhs.hasDueDate
         }
@@ -198,6 +201,10 @@ struct DueeWebRootView: View {
     }
 
     private func completionNewestFirst(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
+        if lhs.isPinned != rhs.isPinned {
+            return lhs.isPinned && !rhs.isPinned
+        }
+
         let lhsTime = lhs.completedAt ?? lhs.createdAt
         let rhsTime = rhs.completedAt ?? rhs.createdAt
         if lhsTime != rhsTime {
@@ -372,6 +379,7 @@ struct DueeWebRootView: View {
                         namespace: rowAnimation,
                         isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                         onToggle: { toggleCompletion(for: task) },
+                        onTogglePin: { togglePinned(for: task) },
                         onEdit: { beginEditing(task) },
                         onDelete: { deleteTask(task) }
                     )
@@ -401,6 +409,7 @@ struct DueeWebRootView: View {
                     namespace: rowAnimation,
                     isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                     onToggle: { toggleCompletion(for: task) },
+                    onTogglePin: { togglePinned(for: task) },
                     onEdit: { beginEditing(task) },
                     onDelete: { deleteTask(task) }
                 )
@@ -449,6 +458,13 @@ struct DueeWebRootView: View {
         clearInputFocus()
         Task {
             await store.setTaskCompletion(taskID: task.id, isCompleted: !task.isCompleted)
+        }
+    }
+
+    private func togglePinned(for task: DueeTask) {
+        clearInputFocus()
+        Task {
+            await store.setTaskPinned(taskID: task.id, isPinned: !task.isPinned)
         }
     }
 

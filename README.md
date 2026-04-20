@@ -17,7 +17,7 @@ A calm Apple-platform app for tracking due-date tasks with a compact floating UI
 ## Features
 
 - Native SwiftUI + SwiftData app for macOS and iOS
-- macOS can sync tasks directly with the web API (`/api`) via a configurable base URL in Settings
+- macOS syncs tasks directly with `https://duee.hexagon.one/api`
 - Compact overlay-style window with custom minimize behavior
 - Keyboard-friendly input (`Return` to add)
 - Status-aware due labels (for active tasks):
@@ -25,7 +25,7 @@ A calm Apple-platform app for tracking due-date tasks with a compact floating UI
   - `due 4/10 • in 3 days`
   - `due 4/10 • 2 days late`
 - Completed tasks show plain due date only
-- Right-click task menu with delete
+- Pin/unpin support in task menus
 - Settings for:
   - Minimal mode
   - Unfocused transparency (macOS)

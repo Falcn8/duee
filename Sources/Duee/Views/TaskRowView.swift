@@ -8,6 +8,7 @@ struct TaskRowView: View {
     let namespace: Namespace.ID
     let isNewlyAdded: Bool
     let onToggle: () -> Void
+    let onTogglePin: (() -> Void)?
     let onEdit: () -> Void
     let onDelete: () -> Void
 
@@ -48,6 +49,14 @@ struct TaskRowView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if task.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(pinColor)
+                        .padding(.leading, 6)
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -69,6 +78,12 @@ struct TaskRowView: View {
             isHovered = hovering
         }
         .contextMenu {
+            if let onTogglePin {
+                Button(action: onTogglePin) {
+                    Label(task.isPinned ? "Unpin" : "Pin", systemImage: task.isPinned ? "pin.slash" : "pin")
+                }
+            }
+
             Button(action: onEdit) {
                 Label("Edit", systemImage: "pencil")
             }
@@ -200,6 +215,13 @@ struct TaskRowView: View {
         case .none:
             return .secondary
         }
+    }
+
+    private var pinColor: Color {
+        if colorTheme.isCurrent {
+            return .secondary.opacity(0.85)
+        }
+        return colorTheme.accentTone(for: colorScheme).opacity(0.9)
     }
 
     private var isOverdue: Bool {

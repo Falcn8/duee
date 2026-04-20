@@ -20,7 +20,6 @@ struct DueeRootView: View {
     @AppStorage(DueePreferenceKeys.appearanceMode) private var appearanceModeRaw = DueeAppearanceMode.system.rawValue
     @AppStorage(DueePreferenceKeys.colorThemeID) private var colorThemeID = DueeColorThemeCatalog.defaultThemeID
     @AppStorage(DueePreferenceKeys.customThemeHexes) private var customThemeHexes = DueeColorThemeCatalog.defaultCustomThemeRawValue
-    @AppStorage(DueePreferenceKeys.apiBaseURL) private var apiBaseURL = "http://localhost:8000"
 
     @State private var draftDueDate = Date()
     @State private var draftHasDueDate = true
@@ -116,8 +115,7 @@ struct DueeRootView: View {
                 unfocusedBackgroundAlpha: $unfocusedBackgroundAlpha,
                 appearanceMode: appearanceModeBinding,
                 colorThemeID: $colorThemeID,
-                customThemeHexes: $customThemeHexes,
-                apiBaseURL: $apiBaseURL
+                customThemeHexes: $customThemeHexes
             )
         }
         .sheet(item: $editingTask) { _ in
@@ -152,6 +150,10 @@ struct DueeRootView: View {
     }
 
     private func dueDateAscending(_ lhs: DueeTask, _ rhs: DueeTask) -> Bool {
+        if lhs.isPinned != rhs.isPinned {
+            return lhs.isPinned && !rhs.isPinned
+        }
+
         if lhs.hasDueDate != rhs.hasDueDate {
             return lhs.hasDueDate && !rhs.hasDueDate
         }
@@ -310,6 +312,7 @@ struct DueeRootView: View {
                         namespace: rowAnimation,
                         isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                         onToggle: { toggleCompletion(for: task) },
+                        onTogglePin: { togglePinned(for: task) },
                         onEdit: { beginEditing(task) },
                         onDelete: { deleteTask(task) }
                     )
@@ -339,6 +342,7 @@ struct DueeRootView: View {
                     namespace: rowAnimation,
                     isNewlyAdded: recentlyAddedTaskIDs.contains(task.id),
                     onToggle: { toggleCompletion(for: task) },
+                    onTogglePin: { togglePinned(for: task) },
                     onEdit: { beginEditing(task) },
                     onDelete: { deleteTask(task) }
                 )
@@ -402,6 +406,14 @@ struct DueeRootView: View {
         editingHasDueDate = task.hasDueDate
         editingDueDate = task.dueDate
         editingTask = task
+    }
+
+    private func togglePinned(for task: DueeTask) {
+        clearInputFocus()
+        withAnimation(.snappy(duration: 0.18, extraBounce: 0)) {
+            task.isPinned.toggle()
+        }
+        persist()
     }
 
     private func saveEditedTask() {
