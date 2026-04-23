@@ -258,23 +258,27 @@ struct TaskRowView: View {
         }
 
         let dateText = task.dueDate.formatted(.dateTime.month(.defaultDigits).day(.defaultDigits))
+        let weekdayText = task.dueDate
+            .formatted(.dateTime.weekday(.abbreviated).locale(Locale(identifier: "en_US_POSIX")))
+            .lowercased()
+        let duePrefix = "due \(dateText) (\(weekdayText))"
         let dayDelta = daysFromToday ?? 0
 
         if task.isCompleted {
-            return "due \(dateText)"
+            return duePrefix
         }
 
         if dayDelta == 0 {
-            return "due \(dateText) • today"
+            return "\(duePrefix) • today"
         }
         if dayDelta > 0 {
             let dayWord = dayDelta == 1 ? "day" : "days"
-            return "due \(dateText) • in \(dayDelta) \(dayWord)"
+            return "\(duePrefix) • in \(dayDelta) \(dayWord)"
         }
 
         let lateDays = abs(dayDelta)
         let dayWord = lateDays == 1 ? "day" : "days"
-        return "due \(dateText) • \(lateDays) \(dayWord) late"
+        return "\(duePrefix) • \(lateDays) \(dayWord) late"
     }
 
     private var accessibilityLabel: String {

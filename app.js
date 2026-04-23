@@ -2138,28 +2138,30 @@ function dueLabel(task) {
     month: "numeric",
     day: "numeric",
   });
+  const weekdayText = dueDate.toLocaleDateString("en-US", { weekday: "short" }).toLowerCase();
+  const duePrefix = `due ${dateText} (${weekdayText})`;
 
   if (task.isCompleted) {
-    return { text: `due ${dateText}`, overdue: false, today: false, tomorrow: false };
+    return { text: duePrefix, overdue: false, today: false, tomorrow: false };
   }
 
   const delta = dayDelta(task.dueDate);
   if (delta === 0) {
-    return { text: `due ${dateText} · today`, overdue: false, today: true, tomorrow: false };
+    return { text: `${duePrefix} · today`, overdue: false, today: true, tomorrow: false };
   }
 
   if (delta === 1) {
-    return { text: `due ${dateText} · tomorrow`, overdue: false, today: false, tomorrow: true };
+    return { text: `${duePrefix} · tomorrow`, overdue: false, today: false, tomorrow: true };
   }
 
   if (delta > 0) {
     const dayWord = delta === 1 ? "day" : "days";
-    return { text: `due ${dateText} · in ${delta} ${dayWord}`, overdue: false, today: false, tomorrow: false };
+    return { text: `${duePrefix} · in ${delta} ${dayWord}`, overdue: false, today: false, tomorrow: false };
   }
 
   const late = Math.abs(delta);
   const dayWord = late === 1 ? "day" : "days";
-  return { text: `due ${dateText} · ${late} ${dayWord} late`, overdue: true, today: false, tomorrow: false };
+  return { text: `${duePrefix} · ${late} ${dayWord} late`, overdue: true, today: false, tomorrow: false };
 }
 
 function compareByDueDate(lhs, rhs) {
